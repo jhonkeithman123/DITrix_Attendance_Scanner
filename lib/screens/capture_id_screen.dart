@@ -3,7 +3,6 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math';
-import '../scanner_service/scan.dart';
 
 import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
@@ -11,7 +10,6 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:syncfusion_flutter_xlsio/xlsio.dart' as xlsio;
-import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
 class CaptureIdScreen extends StatefulWidget {
@@ -427,6 +425,33 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
         debugPrint('Image clean/upload failed: $e');
       }
 
+      // always store lastScan for UI debug, even if empty
+      setState(() {
+        _lastScan = (scanResult ?? <String, dynamic>{});
+      });
+
+      // visible quick feedback so you always see result on-screen
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final id = (_lastScan?['student_number'] ?? '').toString();
+        final name = (_lastScan?['surname'] ?? '').toString();
+        final preview = (_lastScan?['analyzed'] ?? '').toString();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(id.isEmpty && name.isEmpty
+              ? 'OCR empty'
+              : 'OCR -> id=$id name=$name'),
+          duration: const Duration(seconds: 3),
+        ));
+        // also print full preview to console (not truncated)
+        print('[CAPTURE DEBUG] OCR preview: $preview');
+      });
+
+      // verbose console logs for quick inspection
+      debugPrint(
+          '[capture] saved image: ${saved.path} (exists=${await saved.exists()})');
+      debugPrint(
+          '[capture] cleaned image: ${imageToUse.path} (size=${await imageToUse.length()})');
+      debugPrint('[capture] scanResult: ${jsonEncode(_lastScan)}');
+
       // if OCR returned scan data, try to auto-match and mark attendance
       if (scanResult != null && scanResult.isNotEmpty) {
         setState(() {
@@ -594,45 +619,75 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
     return base;
   }
 
-  Future<Map<String, dynamic>> _cleanAndUploadImage(File original) async {
+  Future<Map<String, dynamic>> _runPythonOcr(File imageFile) async {
+    if (!(Platform.isLinux || Platform.isMacOS || Platform.isWindows)) {
+      debugPrint('[PY OCR] Unsupported platform for Python OCR');
+      return <String, dynamic>{};
+    }
     try {
-      final bytes = await original.readAsBytes();
-      final image = img.decodeImage(bytes);
-      if (image == null) return {'file': original, 'scan': <String, dynamic>{}};
-
-      final maxWidth = 1200;
-      final processed = image.width > maxWidth
-          ? img.copyResize(image, width: maxWidth)
-          : image;
-      final jpg = img.encodeJpg(processed, quality: 85);
-
-      final dir = await getApplicationDocumentsDirectory();
-      final cleanedPath =
-          '${dir.path}/${p.basenameWithoutExtension(original.path)}_clean.jpg';
-      final cleaned = File(cleanedPath);
-      await cleaned.writeAsBytes(jpg, flush: true);
-
-      // offline OCR using local scan service functions
-      String ocrText = '';
-      try {
-        ocrText = await ocrExtractText(cleaned);
+      final cwd = Directory.current.path;
+      final candidates = <String>[
+        p.join(cwd, 'lib', 'scanner_service', 'scan.py'),
+        p.join(cwd, 'ocr', 'ocr_id.py'),
+        p.normalize(p.join(cwd, '..', 'lib', 'scanner_service', 'scan.py')),
+      ];
+      final envOverride = Platform.environment['OCR_SCRIPT'];
+      if (envOverride != null && envOverride.isNotEmpty) {
+        candidates.insert(0, envOverride);
+      }
+      String? scriptPath;
+      for (final c in candidates) {
+        if (await File(c).exists()) {
+          scriptPath = c;
+          break;
+        }
+      }
+      if (scriptPath == null) {
         debugPrint(
-            '[OCR] extracted (${ocrText.length} chars) -> ${ocrText.length > 400 ? "${ocrText.substring(0, 400)}..." : ocrText}');
-      } catch (e) {
-        debugPrint('Offline OCR failed: $e');
+            '[PY OCR] script not found. Tried:\n${candidates.join('\n')}');
+        return <String, dynamic>{};
       }
 
-      final parsed = parseIdAndSurname(ocrText);
-      final scanJson = {
-        'student_number': parsed['student_number'] ?? '',
-        'surname': parsed['surname'] ?? '',
-        'analyzed': parsed['analyzed'] ?? ocrText,
-      };
-      debugPrint('[parseIdAndSurname] $scanJson');
-
-      return {'file': cleaned, 'scan': scanJson};
+      final exeCandidates = ['python3', 'python'];
+      ProcessResult? res;
+      for (final exe in exeCandidates) {
+        try {
+          res = await Process.run(
+            exe,
+            [scriptPath, imageFile.path],
+            stdoutEncoding: utf8,
+            stderrEncoding: utf8,
+          );
+          if (res.exitCode == 0) break;
+        } catch (_) {}
+      }
+      if (res == null) {
+        debugPrint('[PY OCR] No python interpreter found.');
+        return <String, dynamic>{};
+      }
+      if (res.exitCode != 0) {
+        debugPrint('[PY OCR] exit=${res.exitCode} stderr=${res.stderr}');
+        return <String, dynamic>{};
+      }
+      final outStr = res.stdout is String
+          ? (res.stdout as String)
+          : utf8.decode(res.stdout);
+      return jsonDecode(outStr) as Map<String, dynamic>;
     } catch (e) {
-      debugPrint('cleanAndUpload (OCR) error: $e');
+      debugPrint('[PY OCR] failed: $e');
+      return <String, dynamic>{};
+    }
+  }
+
+  Future<Map<String, dynamic>> _cleanAndUploadImage(File original) async {
+    try {
+      // Delegate all processing + OCR to Python
+      debugPrint('[OCR DEBUG] delegating to Python: ${original.path}');
+      final scanJson = await _runPythonOcr(original);
+      // Show exactly what was captured
+      return {'file': original, 'scan': scanJson};
+    } catch (e) {
+      debugPrint('cleanAndUpload (Python OCR) error: $e');
       return {'file': original, 'scan': <String, dynamic>{}};
     }
   }
@@ -942,6 +997,49 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
     }
   }
 
+  Future<void> _debugRunOcrFromPicker() async {
+    try {
+      final res = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        withData: true,
+      );
+      if (res == null || res.files.isEmpty) return;
+      final f = res.files.first;
+      final bytes = f.bytes;
+      if (bytes == null) {
+        debugPrint('[DEBUG OCR] picked file has no bytes');
+        return;
+      }
+
+      final dir = await getApplicationDocumentsDirectory();
+      final tmpPath =
+          '${dir.path}/debug_pick_${DateTime.now().millisecondsSinceEpoch}_${f.name}';
+      final tmp = File(tmpPath);
+      await tmp.writeAsBytes(bytes, flush: true);
+      debugPrint('[DEBUG OCR] picked -> $tmpPath (size=${await tmp.length()})');
+
+      final resMap = await _cleanAndUploadImage(tmp);
+      final scan =
+          resMap['scan'] as Map<String, dynamic>? ?? <String, dynamic>{};
+
+      setState(() => _lastScan = scan);
+
+      debugPrint('[DEBUG OCR] scanResult: ${jsonEncode(scan)}');
+      // ignore: use_build_context_synchronously
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(scan.isEmpty
+            ? 'Debug OCR: EMPTY'
+            : 'Debug OCR: id=${scan['student_number'] ?? ''} name=${scan['surname'] ?? ''}'),
+        duration: const Duration(seconds: 4),
+      ));
+    } catch (e) {
+      debugPrint('[DEBUG OCR] failed: $e');
+      // ignore: use_build_context_synchronously
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Debug OCR error: $e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // ignore: unused_local_variable
@@ -953,6 +1051,12 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
       appBar: AppBar(
         title: const Text('Capture ID'),
         actions: [
+          // Debug: pick an image and run OCR pipeline
+          IconButton(
+            icon: const Icon(Icons.bug_report),
+            tooltip: 'Debug OCR (pick image)',
+            onPressed: _debugRunOcrFromPicker,
+          ),
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: 'Set subject & class time',
@@ -1136,13 +1240,8 @@ class _TaggingSheetState extends State<_TaggingSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = widget.roster
-        .asMap()
-        .entries
-        .where((e) => (e.value['name'] as String)
-            .toLowerCase()
-            .contains(query.toLowerCase()))
-        .toList();
+    // no search input — show full roster for tagging (auto-match occurs before sheet shows)
+    final filtered = widget.roster.asMap().entries.toList();
 
     return SafeArea(
       child: Padding(
@@ -1156,12 +1255,14 @@ class _TaggingSheetState extends State<_TaggingSheet> {
               padding: const EdgeInsets.all(12.0),
               child: Row(children: [
                 Expanded(
-                  child: TextField(
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.search),
-                      hintText: 'Search name to tag',
-                    ),
-                    onChanged: (v) => setState(() => query = v),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      Text('Select student to tag'),
+                      SizedBox(height: 6),
+                      Text(
+                          'If auto-match succeeded the person is already marked.'),
+                    ],
                   ),
                 ),
                 const SizedBox(width: 8),
