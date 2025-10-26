@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.5.0
+  path: ^1.9.1
   camera: ^0.11.2+1
   provider: ^6.0.0
   excel: ^4.0.6
@@ -17,6 +18,8 @@ dependencies:
   path_provider: ^2.1.5
   permission_handler: ^12.0.1
   syncfusion_flutter_xlsio: ^29.2.11
+  flutter_tesseract_ocr: any
+  image: any
 
 dev_dependencies:
   flutter_test:
@@ -34,3 +37,4 @@ flutter:
   assets:
     - assets/images/
     - assets/image/DITrix.jpg
+    - assets/tessdata/eng.traineddata

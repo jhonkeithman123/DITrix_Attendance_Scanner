@@ -2,6 +2,8 @@
 
 import 'dart:io';
 import 'dart:convert';
+import 'dart:math';
+import '../scanner_service/scan.dart';
 
 import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
@@ -9,6 +11,8 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:syncfusion_flutter_xlsio/xlsio.dart' as xlsio;
+import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
 
 class CaptureIdScreen extends StatefulWidget {
   const CaptureIdScreen({super.key});
@@ -20,6 +24,7 @@ class CaptureIdScreen extends StatefulWidget {
 class _CaptureIdScreenState extends State<CaptureIdScreen> {
   DateTime selectedDate = DateTime.now();
   List<Map<String, dynamic>> roster = [];
+  Map<String, dynamic>? _lastScan; // last OCR/parse result for debugging
 
   String subject = '';
   TimeOfDay classStartTime = const TimeOfDay(hour: 0, minute: 0);
@@ -410,6 +415,138 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
       final ts = DateTime.now().toIso8601String().replaceAll(':', '-');
       final saved = await File(file.path).copy('${dir.path}/capture_$ts.jpg');
 
+      // clean image (resize/re-encode) and upload to backend; use cleaned file for tagging UI
+      File imageToUse = saved;
+      Map<String, dynamic>? scanResult;
+      try {
+        final res = await _cleanAndUploadImage(
+            saved); // returns {'file': File, 'scan': Map}
+        imageToUse = res['file'] as File? ?? saved;
+        scanResult = res['scan'] as Map<String, dynamic>?;
+      } catch (e) {
+        debugPrint('Image clean/upload failed: $e');
+      }
+
+      // if OCR returned scan data, try to auto-match and mark attendance
+      if (scanResult != null && scanResult.isNotEmpty) {
+        setState(() {
+          _lastScan = scanResult;
+        });
+        debugPrint('[_captureAndTag] scanResult: ${jsonEncode(scanResult)}');
+        final scannedNumber = (scanResult['student_number'] ?? '')
+            .toString()
+            .toLowerCase()
+            .trim();
+        final scannedSurname =
+            (scanResult['surname'] ?? scanResult['analyzed'] ?? '')
+                .toString()
+                .toLowerCase()
+                .trim();
+
+        // 1) If student number exists on OCR, prefer exact id match
+        if (scannedNumber.isNotEmpty) {
+          final normScanId = _normalizeId(scannedNumber);
+          final idIdx = roster.indexWhere(
+              (r) => _normalizeId((r['id'] ?? '').toString()) == normScanId);
+
+          if (idIdx != -1) {
+            final now = DateTime.now();
+            final status = _computeStatus(now);
+            if (!mounted) return;
+            setState(() {
+              roster[idIdx]['present'] = true;
+              roster[idIdx]['time'] = now.toIso8601String();
+              roster[idIdx]['status'] = status;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(
+                    'Auto-matched "${roster[idIdx]['name']}" by ID ($status)')));
+            return; // matched by ID, done
+          }
+
+          // id not found: ask user if this ID belongs to the class (offer to add & mark)
+          final add = await showDialog<bool>(
+            // ignore: use_build_context_synchronously
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Unknown ID'),
+              content: Text(
+                  'Scanned student ID "$scannedNumber" was not found in the loaded masterlist. Add to class and mark present?'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    child: const Text('No')),
+                ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    child: const Text('Yes, add & mark')),
+              ],
+            ),
+          );
+
+          if (add == true) {
+            final now = DateTime.now();
+            final status = _computeStatus(now);
+            final displayName = scannedSurname.isNotEmpty
+                ? scannedSurname.split(RegExp(r'\s+')).map((s) {
+                    // capitalize simple surname token
+                    return s.isEmpty
+                        ? s
+                        : '${s[0].toUpperCase()}${s.substring(1)}';
+                  }).join(' ')
+                : scannedNumber;
+            if (!mounted) return;
+            setState(() {
+              roster.add({
+                'id': scannedNumber,
+                'name': displayName,
+                'present': true,
+                'time': now.toIso8601String(),
+                'status': status
+              });
+            });
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content:
+                    Text('Added $displayName and marked present ($status)')));
+            return;
+          }
+          // if user chose not to add, fall through to manual tagging UI
+        }
+
+        // 2) If scanned number absent or user declined add, try surname-only matching automatically
+        if (scannedSurname.isNotEmpty) {
+          double bestScore = 0.0;
+          int bestIdx = -1;
+          for (var entry in roster.asMap().entries) {
+            final idx = entry.key;
+            final rosterSurname =
+                _extractSurnameFromName((entry.value['name'] ?? '').toString());
+            final score = _nameSimilarity(rosterSurname, scannedSurname);
+            if (score > bestScore) {
+              bestScore = score;
+              bestIdx = idx;
+            }
+          }
+          const double threshold =
+              0.65; // increase strictness for name-only match
+          if (bestIdx != -1 && bestScore >= threshold) {
+            final now = DateTime.now();
+            final status = _computeStatus(now);
+            if (!mounted) return;
+            setState(() {
+              roster[bestIdx]['present'] = true;
+              roster[bestIdx]['time'] = now.toIso8601String();
+              roster[bestIdx]['status'] = status;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(
+                    'Auto-matched "${roster[bestIdx]['name']}" by name ($status)')));
+            return; // matched by name, done
+          }
+        }
+      } else {
+        debugPrint('[_captureAndTag] no scan result');
+      }
+
       if (!mounted) return;
       await showModalBottomSheet(
         context: context,
@@ -430,7 +567,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
                 content: Text(
                     'Marked "${roster[index]['name']}" present ($status)')));
           },
-          imageFile: saved,
+          imageFile: imageToUse,
         ),
       );
     } catch (e) {
@@ -440,6 +577,77 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
             .showSnackBar(const SnackBar(content: Text('Capture failed')));
       }
     }
+  }
+
+  // simple name similarity based on common letters and length
+  double _nameSimilarity(String a, String b) {
+    final sa = a.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    final sb = b.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    if (sa.isEmpty || sb.isEmpty) return 0.0;
+    final setA = sa.split('').toSet();
+    final setB = sb.split('').toSet();
+    final common = setA.intersection(setB).length;
+    final denom = max(sa.length, sb.length);
+    double base = common / denom;
+    // boost if one contains the other
+    if (sa.contains(sb) || sb.contains(sa)) base = 1.0;
+    return base;
+  }
+
+  Future<Map<String, dynamic>> _cleanAndUploadImage(File original) async {
+    try {
+      final bytes = await original.readAsBytes();
+      final image = img.decodeImage(bytes);
+      if (image == null) return {'file': original, 'scan': <String, dynamic>{}};
+
+      final maxWidth = 1200;
+      final processed = image.width > maxWidth
+          ? img.copyResize(image, width: maxWidth)
+          : image;
+      final jpg = img.encodeJpg(processed, quality: 85);
+
+      final dir = await getApplicationDocumentsDirectory();
+      final cleanedPath =
+          '${dir.path}/${p.basenameWithoutExtension(original.path)}_clean.jpg';
+      final cleaned = File(cleanedPath);
+      await cleaned.writeAsBytes(jpg, flush: true);
+
+      // offline OCR using local scan service functions
+      String ocrText = '';
+      try {
+        ocrText = await ocrExtractText(cleaned);
+        debugPrint(
+            '[OCR] extracted (${ocrText.length} chars) -> ${ocrText.length > 400 ? "${ocrText.substring(0, 400)}..." : ocrText}');
+      } catch (e) {
+        debugPrint('Offline OCR failed: $e');
+      }
+
+      final parsed = parseIdAndSurname(ocrText);
+      final scanJson = {
+        'student_number': parsed['student_number'] ?? '',
+        'surname': parsed['surname'] ?? '',
+        'analyzed': parsed['analyzed'] ?? ocrText,
+      };
+      debugPrint('[parseIdAndSurname] $scanJson');
+
+      return {'file': cleaned, 'scan': scanJson};
+    } catch (e) {
+      debugPrint('cleanAndUpload (OCR) error: $e');
+      return {'file': original, 'scan': <String, dynamic>{}};
+    }
+  }
+
+  String _normalizeId(String s) =>
+      s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  // helper to extract surname from roster name (handles "Surname, First" and "First Last")
+  String _extractSurnameFromName(String name) {
+    final n = name.trim();
+    if (n.contains(',')) {
+      return n.split(',')[0].trim().toLowerCase();
+    }
+    final parts = n.split(RegExp(r'\s+'));
+    return parts.isNotEmpty ? parts.last.trim().toLowerCase() : n.toLowerCase();
   }
 
   Future<void> _exportCsv() async {
@@ -805,6 +1013,31 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
                   : const Center(child: Text('Camera disabled')),
             ),
           ),
+          // debug area: show last OCR/analyzed result (visible when present)
+          if (_lastScan != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                    color: Colors.black12,
+                    borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Last OCR (debug):',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    SelectableText(_lastScan?['analyzed']?.toString() ?? '',
+                        maxLines: 6, showCursor: true),
+                    const SizedBox(height: 6),
+                    Text(
+                        'Parsed: id=${_lastScan?['student_number'] ?? ''}  name=${_lastScan?['surname'] ?? ''}'),
+                  ],
+                ),
+              ),
+            ),
           const SizedBox(height: 8),
           const Divider(height: 1),
           Expanded(
@@ -965,6 +1198,37 @@ class _TaggingSheetState extends State<_TaggingSheet> {
             const SizedBox(height: 8),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// simple bottom sheet to confirm among multiple surname candidates
+// ignore: unused_element
+class _ConfirmMatchesSheet extends StatelessWidget {
+  final List<MapEntry<int, Map<String, dynamic>>> matches;
+  // ignore: use_super_parameters
+  const _ConfirmMatchesSheet(this.matches, {Key? key}) : super(key: key);
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const ListTile(title: Text('Select matching student')),
+          ...matches.map((e) {
+            final idx = e.key;
+            final entry = e.value;
+            return ListTile(
+              title: Text(entry['name'] ?? ''),
+              subtitle: Text('ID: ${entry['id'] ?? ''}'),
+              onTap: () => Navigator.of(context).pop(idx),
+            );
+          }),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'))
+        ],
       ),
     );
   }
