@@ -4,13 +4,17 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:syncfusion_flutter_xlsio/xlsio.dart' as xlsio;
-import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../scanner_service/scan.dart';
+import '../theme/app_theme.dart';
 
 class CaptureIdScreen extends StatefulWidget {
   const CaptureIdScreen({super.key});
@@ -33,13 +37,34 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
   bool _isCameraInitialized = false;
   bool _cameraEnabled = true; // Toggle for manual on/off
 
+  late final ScannerService _scanner;
+  final List<String> _uiLogs = <String>[];
+  bool _developerMode = false;
+  bool _showLogs = true;
+  void _log(String msg) {
+    final now = DateTime.now();
+    final h = now.hour.toString().padLeft(2, '0');
+    final m = now.minute.toString().padLeft(2, '0');
+    final s = now.second.toString().padLeft(2, '0');
+    final line = '[$h:$m:$s] $msg';
+    debugPrint(line);
+    if (!mounted) return;
+    setState(() {
+      _uiLogs.add(line);
+      if (_uiLogs.length > 300) {
+        _uiLogs.removeRange(0, _uiLogs.length - 300);
+      }
+    });
+  }
+
   static const int _defaultCutoffHour = 9;
   static const int _defaultCutoffMinute = 0;
 
   @override
   void initState() {
     super.initState();
-    _loadSampleMasterlist();
+    _scanner = ScannerService(onLog: _log);
+    _loadPrefs();
     _initCamera();
   }
 
@@ -47,6 +72,13 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
   void dispose() {
     _cameraController?.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _developerMode = prefs.getBool('developer_mode') ?? false;
+    });
   }
 
   Future<void> _initCamera() async {
@@ -108,6 +140,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
     final subjectCtrl = TextEditingController(text: subject);
     TimeOfDay tempStart = classStartTime;
     TimeOfDay tempEnd = classEndTime;
+    bool devTemp = _developerMode;
 
     await showDialog(
       context: context,
@@ -159,6 +192,14 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
                   ),
                 ],
               ),
+              const Divider(height: 24),
+              SwitchListTile(
+                title: const Text('Developer mode'),
+                subtitle:
+                    const Text('Enable in-app debug logs and diagnostics'),
+                value: devTemp,
+                onChanged: (v) => setStateDialog(() => devTemp = v),
+              ),
             ],
           ),
         ),
@@ -168,12 +209,19 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
               setState(() {
                 subject = subjectCtrl.text.trim();
                 classStartTime = tempStart;
                 classEndTime = tempEnd;
+                _developerMode = devTemp;
+                // when enabling developer mode, show logs automatically
+                if (_developerMode) {
+                  _showLogs = true;
+                }
               });
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('developer_mode', _developerMode);
               Navigator.of(ctx).pop();
             },
             child: const Text('Save'),
@@ -318,39 +366,6 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
     final hasDigit = s.contains(RegExp(r'\d'));
     final shortToken = s.length < 6;
     return hasDigit || shortToken;
-  }
-
-  void _loadSampleMasterlist() {
-    const sample = [
-      {'id': 'S001', 'name': 'Alice Jhonson'},
-      {'id': 'S002', 'name': 'Bob Smith'},
-      {'id': 'S003', 'name': 'Carol Lee'},
-      {'id': 'S004', 'name': 'Daniel Kim'},
-      {'id': 'S005', 'name': 'Eve Martinez'},
-    ];
-    if (!mounted) return;
-    setState(() {
-      roster = sample
-          .map((n) => {
-                'id': n['id']!,
-                'name': n['name']!,
-                'present': false,
-                'time': null,
-                'status': null
-              })
-          .toList();
-      roster.sort((a, b) {
-        String surnameOf(String name) {
-          final s = name.trim();
-          if (s.contains(',')) return s.split(',')[0].trim().toLowerCase();
-          final parts = s.split(RegExp(r'\s+'));
-          return parts.isNotEmpty ? parts.last.toLowerCase() : s.toLowerCase();
-        }
-
-        return surnameOf(a['name'] as String)
-            .compareTo(surnameOf(b['name'] as String));
-      });
-    });
   }
 
   void _simulateCaptureOne() {
@@ -619,77 +634,52 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
     return base;
   }
 
-  Future<Map<String, dynamic>> _runPythonOcr(File imageFile) async {
-    if (!(Platform.isLinux || Platform.isMacOS || Platform.isWindows)) {
-      debugPrint('[PY OCR] Unsupported platform for Python OCR');
-      return <String, dynamic>{};
-    }
-    try {
-      final cwd = Directory.current.path;
-      final candidates = <String>[
-        p.join(cwd, 'lib', 'scanner_service', 'scan.py'),
-        p.join(cwd, 'ocr', 'ocr_id.py'),
-        p.normalize(p.join(cwd, '..', 'lib', 'scanner_service', 'scan.py')),
-      ];
-      final envOverride = Platform.environment['OCR_SCRIPT'];
-      if (envOverride != null && envOverride.isNotEmpty) {
-        candidates.insert(0, envOverride);
-      }
-      String? scriptPath;
-      for (final c in candidates) {
-        if (await File(c).exists()) {
-          scriptPath = c;
-          break;
-        }
-      }
-      if (scriptPath == null) {
-        debugPrint(
-            '[PY OCR] script not found. Tried:\n${candidates.join('\n')}');
-        return <String, dynamic>{};
-      }
-
-      final exeCandidates = ['python3', 'python'];
-      ProcessResult? res;
-      for (final exe in exeCandidates) {
-        try {
-          res = await Process.run(
-            exe,
-            [scriptPath, imageFile.path],
-            stdoutEncoding: utf8,
-            stderrEncoding: utf8,
-          );
-          if (res.exitCode == 0) break;
-        } catch (_) {}
-      }
-      if (res == null) {
-        debugPrint('[PY OCR] No python interpreter found.');
-        return <String, dynamic>{};
-      }
-      if (res.exitCode != 0) {
-        debugPrint('[PY OCR] exit=${res.exitCode} stderr=${res.stderr}');
-        return <String, dynamic>{};
-      }
-      final outStr = res.stdout is String
-          ? (res.stdout as String)
-          : utf8.decode(res.stdout);
-      return jsonDecode(outStr) as Map<String, dynamic>;
-    } catch (e) {
-      debugPrint('[PY OCR] failed: $e');
-      return <String, dynamic>{};
-    }
-  }
-
   Future<Map<String, dynamic>> _cleanAndUploadImage(File original) async {
     try {
       // Delegate all processing + OCR to Python
       debugPrint('[OCR DEBUG] delegating to Python: ${original.path}');
-      final scanJson = await _runPythonOcr(original);
-      // Show exactly what was captured
+      _log('[OCR] running on: ${Platform.operatingSystem} (${original.path})');
+      final scanJson = await _scanner.runOcr(original);
+
+      // Mobile hint
+      if (scanJson['error'] == 'mobile_unsupported') {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+              'Python OCR isn\'t available on Android/iOS. Run on desktop or set up remote OCR.',
+            ),
+          ));
+        }
+        return {'file': original, 'scan': <String, dynamic>{}};
+      }
+
+      // Surface result immediately
+      if (mounted) {
+        final id = (scanJson['student_number'] ?? '').toString();
+        final name = (scanJson['surname'] ?? '').toString();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(id.isEmpty && name.isEmpty
+              ? 'OCR: empty'
+              : 'OCR -> id=$id name=$name'),
+          duration: const Duration(seconds: 3),
+        ));
+        _log('[OCR DEBUG] result -> id="$id" name="$name"');
+      }
       return {'file': original, 'scan': scanJson};
     } catch (e) {
       debugPrint('cleanAndUpload (Python OCR) error: $e');
+      _log('cleanAndUpload (Python OCR) error: $e');
       return {'file': original, 'scan': <String, dynamic>{}};
     }
+  }
+
+  Future<void> _copyLogs() async {
+    final text = _uiLogs.join('\n');
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Copied ${_uiLogs.length} log lines')),
+    );
   }
 
   String _normalizeId(String s) =>
@@ -997,49 +987,6 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
     }
   }
 
-  Future<void> _debugRunOcrFromPicker() async {
-    try {
-      final res = await FilePicker.platform.pickFiles(
-        type: FileType.image,
-        withData: true,
-      );
-      if (res == null || res.files.isEmpty) return;
-      final f = res.files.first;
-      final bytes = f.bytes;
-      if (bytes == null) {
-        debugPrint('[DEBUG OCR] picked file has no bytes');
-        return;
-      }
-
-      final dir = await getApplicationDocumentsDirectory();
-      final tmpPath =
-          '${dir.path}/debug_pick_${DateTime.now().millisecondsSinceEpoch}_${f.name}';
-      final tmp = File(tmpPath);
-      await tmp.writeAsBytes(bytes, flush: true);
-      debugPrint('[DEBUG OCR] picked -> $tmpPath (size=${await tmp.length()})');
-
-      final resMap = await _cleanAndUploadImage(tmp);
-      final scan =
-          resMap['scan'] as Map<String, dynamic>? ?? <String, dynamic>{};
-
-      setState(() => _lastScan = scan);
-
-      debugPrint('[DEBUG OCR] scanResult: ${jsonEncode(scan)}');
-      // ignore: use_build_context_synchronously
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(scan.isEmpty
-            ? 'Debug OCR: EMPTY'
-            : 'Debug OCR: id=${scan['student_number'] ?? ''} name=${scan['surname'] ?? ''}'),
-        duration: const Duration(seconds: 4),
-      ));
-    } catch (e) {
-      debugPrint('[DEBUG OCR] failed: $e');
-      // ignore: use_build_context_synchronously
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Debug OCR error: $e')));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     // ignore: unused_local_variable
@@ -1049,33 +996,77 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
 
     return Scaffold(
       appBar: AppBar(
+        flexibleSpace: Container(
+          decoration: BoxDecoration(gradient: AppGradients.of(context)),
+        ),
         title: const Text('Capture ID'),
         actions: [
-          // Debug: pick an image and run OCR pipeline
-          IconButton(
-            icon: const Icon(Icons.bug_report),
-            tooltip: 'Debug OCR (pick image)',
-            onPressed: _debugRunOcrFromPicker,
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings),
-            tooltip: 'Set subject & class time',
-            onPressed: _promptSubjectAndTime,
-          ),
-          IconButton(
-            icon: Icon(_cameraEnabled ? Icons.videocam : Icons.videocam_off),
-            tooltip: _cameraEnabled ? 'Disable camera' : 'Enable camera',
-            onPressed: _toggleCamera,
-          ),
-          IconButton(
-            icon: const Icon(Icons.file_upload),
-            tooltip: 'Load masterlist (CSV)',
-            onPressed: _loadMasterlist,
-          ),
-          IconButton(
-            icon: const Icon(Icons.download),
-            tooltip: 'Export attendance',
-            onPressed: _exportPrompt,
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) async {
+              switch (value) {
+                case 'toggleLogs':
+                  setState(() => _showLogs = !_showLogs);
+                  break;
+                case 'clearLogs':
+                  setState(() => _uiLogs.clear());
+                  break;
+                case 'copyLogs':
+                  await _copyLogs();
+                  break;
+                case 'settings':
+                  await _promptSubjectAndTime();
+                  break;
+                case 'toggleCam':
+                  await _toggleCamera();
+                  break;
+                case 'loadCsv':
+                  await _loadMasterlist();
+                  break;
+                case 'export':
+                  await _exportPrompt();
+                  break;
+              }
+            },
+            itemBuilder: (ctx) => [
+              PopupMenuItem(
+                value: 'toggleLogs',
+                child: Text(_showLogs ? 'Hide debug logs' : 'Show debug logs'),
+              ),
+              const PopupMenuItem(
+                enabled: false,
+                child: Divider(height: 1),
+              ),
+              const PopupMenuItem(
+                value: 'settings',
+                child: Text('Set subject & class time'),
+              ),
+              PopupMenuItem(
+                value: 'toggleCam',
+                child:
+                    Text(_cameraEnabled ? 'Disable camera' : 'Enable camera'),
+              ),
+              const PopupMenuItem(
+                value: 'loadCsv',
+                child: Text('Load masterlist (CSV)'),
+              ),
+              const PopupMenuItem(
+                value: 'export',
+                child: Text('Export attendance'),
+              ),
+              if (_developerMode)
+                const PopupMenuItem(enabled: false, child: Divider(height: 1)),
+              if (_developerMode)
+                const PopupMenuItem(
+                  value: 'clearLogs',
+                  child: Text('Clear debug logs'),
+                ),
+              if (_developerMode)
+                const PopupMenuItem(
+                  value: 'copyLogs',
+                  child: Text('Copy debug logs'),
+                ),
+            ],
           ),
         ],
       ),
@@ -1117,27 +1108,46 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
                   : const Center(child: Text('Camera disabled')),
             ),
           ),
-          // debug area: show last OCR/analyzed result (visible when present)
-          if (_lastScan != null)
+          if (_developerMode && _showLogs)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Container(
+                height: 160,
                 width: double.infinity,
                 decoration: BoxDecoration(
-                    color: Colors.black12,
-                    borderRadius: BorderRadius.circular(8)),
-                padding: const EdgeInsets.all(8),
+                  color: Colors.black12,
+                  borderRadius: BorderRadius.circular(8),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Last OCR (debug):',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 6),
-                    SelectableText(_lastScan?['analyzed']?.toString() ?? '',
-                        maxLines: 6, showCursor: true),
-                    const SizedBox(height: 6),
-                    Text(
-                        'Parsed: id=${_lastScan?['student_number'] ?? ''}  name=${_lastScan?['surname'] ?? ''}'),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
+                      child: Row(
+                        children: [
+                          const Text('Debug logs',
+                              style: TextStyle(fontWeight: FontWeight.bold)),
+                          const Spacer(),
+                          TextButton.icon(
+                            onPressed: _copyLogs,
+                            icon: const Icon(Icons.copy, size: 16),
+                            label: const Text('Copy'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: ListView.builder(
+                        padding: const EdgeInsets.all(8),
+                        itemCount: _uiLogs.length,
+                        itemBuilder: (ctx, i) => Text(
+                          _uiLogs[i],
+                          style: const TextStyle(
+                              fontFamily: 'monospace', fontSize: 12),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1146,45 +1156,144 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
           const Divider(height: 1),
           Expanded(
               child: roster.isEmpty
-                  ? const Center(child: Text('No names loaded'))
-                  : ListView.separated(
+                  ? const Center(
+                      child: Text('Load the masterlist to show the list'))
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
                       itemCount: roster.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
                       itemBuilder: (context, i) {
-                        final entry = roster[i];
-                        final timeStr = _formatTimeIso(entry['time']);
-                        final status = entry['status'] ??
-                            (entry['present'] == true ? 'Present' : 'Absent');
-                        return ListTile(
-                          title: Text(entry['name'] ?? ''),
-                          subtitle: Text(
-                              'ID: ${entry['id'] ?? ''}  •  Time: $timeStr'),
-                          trailing:
-                              Row(mainAxisSize: MainAxisSize.min, children: [
-                            Text(status,
-                                style: TextStyle(
-                                    color: status == 'On Time' ||
-                                            status == 'Present'
-                                        ? Colors.greenAccent
-                                        : Colors.redAccent)),
-                            const SizedBox(width: 12),
-                            Switch(
-                              value: entry['present'] ?? false,
-                              onChanged: (v) => setState(() {
-                                roster[i]['present'] = v;
-                                if (!v) {
-                                  roster[i]['time'] = null;
-                                  roster[i]['status'] = null;
-                                } else {
-                                  final now = DateTime.now();
-                                  roster[i]['time'] = now.toIso8601String();
-                                  roster[i]['status'] = _computeStatus(now);
-                                }
-                              }),
+                        final e = roster[i];
+                        final name = (e['name'] ?? '') as String;
+                        final id = (e['id'] ?? '') as String;
+                        final timeStr = _formatTimeIso(e['time']);
+                        final status = (e['status'] ??
+                                (e['present'] == true ? 'Present' : 'Absent'))
+                            as String;
+                        Color chipColor;
+                        switch (status) {
+                          case 'On Time':
+                            chipColor = Colors.green;
+                            break;
+                          case 'Late':
+                            chipColor = Colors.orange;
+                            break;
+                          case 'Present':
+                            chipColor = Colors.blue;
+                            break;
+                          default:
+                            chipColor = Colors.grey;
+                        }
+                        String initials() {
+                          final parts = name.trim().split(RegExp(r'\s+'));
+                          if (parts.isEmpty) return '?';
+                          final a =
+                              parts.first.isNotEmpty ? parts.first[0] : '';
+                          final b = parts.length > 1 && parts.last.isNotEmpty
+                              ? parts.last[0]
+                              : '';
+                          return (a + b).toUpperCase();
+                        }
+
+                        return Card(
+                          elevation: 0,
+                          margin: const EdgeInsets.symmetric(vertical: 6),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Row(
+                              children: [
+                                CircleAvatar(
+                                  radius: 20,
+                                  child: Text(initials()),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              name,
+                                              style: const TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Container(
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  chipColor.withOpacity(0.15),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                            ),
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 10, vertical: 4),
+                                            child: Text(
+                                              status,
+                                              style: TextStyle(
+                                                color: chipColor,
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        children: [
+                                          Icon(Icons.badge,
+                                              size: 16,
+                                              color:
+                                                  Theme.of(context).hintColor),
+                                          const SizedBox(width: 6),
+                                          Expanded(
+                                              child: Text(id,
+                                                  style: TextStyle(
+                                                      color: Theme.of(context)
+                                                          .hintColor))),
+                                          const SizedBox(width: 12),
+                                          Icon(Icons.access_time,
+                                              size: 16,
+                                              color:
+                                                  Theme.of(context).hintColor),
+                                          const SizedBox(width: 6),
+                                          Text(timeStr.isEmpty ? '—' : timeStr,
+                                              style: TextStyle(
+                                                  color: Theme.of(context)
+                                                      .hintColor)),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Switch(
+                                  value: e['present'] ?? false,
+                                  onChanged: (v) => setState(() {
+                                    roster[i]['present'] = v;
+                                    if (!v) {
+                                      roster[i]['time'] = null;
+                                      roster[i]['status'] = null;
+                                    } else {
+                                      final now = DateTime.now();
+                                      roster[i]['time'] = now.toIso8601String();
+                                      roster[i]['status'] = _computeStatus(now);
+                                    }
+                                  }),
+                                ),
+                              ],
                             ),
-                          ]),
+                          ),
                         );
-                      })),
+                      },
+                    )),
           Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
@@ -1192,7 +1301,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
                 Expanded(
                   child: ElevatedButton.icon(
                     icon: const Icon(Icons.camera_alt),
-                    label: const Text(''),
+                    label: const Text('capture'),
                     onPressed: _captureAndTag,
                   ),
                 ),

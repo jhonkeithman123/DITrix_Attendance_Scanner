@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'about_screen.dart';
 import 'capture_id_screen.dart';
 import '../widgets/id_scanner_widget.dart';
+import '../theme/app_theme.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -13,6 +14,9 @@ class HomeScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
+        flexibleSpace: Container(
+          decoration: BoxDecoration(gradient: AppGradients.of(context)),
+        ),
         title: Row(
           children: [
             Image.asset('assets/image/DITrix.jpg',

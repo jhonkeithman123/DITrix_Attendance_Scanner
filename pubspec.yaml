@@ -10,16 +10,17 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.5.0
+  image: any
   path: ^1.9.1
   camera: ^0.11.2+1
   provider: ^6.0.0
-  excel: ^4.0.6
   file_picker: ^10.3.3
   path_provider: ^2.1.5
+  flutter_tesseract_ocr: any
+  shared_preferences: ^2.5.3
   permission_handler: ^12.0.1
   syncfusion_flutter_xlsio: ^29.2.11
-  flutter_tesseract_ocr: any
-  image: any
+  google_mlkit_text_recognition: ^0.15.0
 
 dev_dependencies:
   flutter_test:

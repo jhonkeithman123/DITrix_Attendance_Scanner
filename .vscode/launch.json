@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flutter Linux",
+      "request": "launch",
+      "type": "dart",
+      "env": {
+        "PYTHON_EXE": "/home/keith123/miniconda3/envs/DITrix/bin/python",
+        "OCR_SCRIPT": "${workspaceFolder}/student-id-scanner/flutter_app/lib/scanner_service/scan.py",
+        "CONDA_PREFIX": "/home/keith123/miniconda3/envs/DITrix"
+      }
+    }
+  ]
+}
