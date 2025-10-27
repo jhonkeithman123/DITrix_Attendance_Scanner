@@ -18,6 +18,9 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Session> _sessions = [];
   bool _loading = true;
 
+  // new: control appbar title expansion when tapping the logo
+  bool _appBarTitleExpanded = false;
+
   @override
   void initState() {
     super.initState();
@@ -44,6 +47,23 @@ class _HomeScreenState extends State<HomeScreen> {
     await _refresh();
   }
 
+  // new: delete a session
+  Future<void> _deleteSession(dynamic id) async {
+    try {
+      await _store.delete(id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Session deleted')),
+      );
+      await _refresh();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to delete session: $e')),
+      );
+    }
+  }
+
   bool _drawerTitleExpanded = false;
 
   @override
@@ -58,24 +78,67 @@ class _HomeScreenState extends State<HomeScreen> {
         flexibleSpace: Container(
           decoration: BoxDecoration(gradient: AppGradients.of(context)),
         ),
+        // logo + compact title. Tapping the logo toggles full title.
         title: Row(
           children: [
-            ClipRRect(
+            InkWell(
               borderRadius: BorderRadius.circular(8),
-              child: Image.asset(
-                'assets/image/DITrix.jpg',
-                height: 36,
-                width: 36,
-                fit: BoxFit.cover,
-                errorBuilder: (c, e, s) => const SizedBox(),
+              onTap: () => setState(() {
+                _appBarTitleExpanded = !_appBarTitleExpanded;
+              }),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.asset(
+                  'assets/image/DITrix.jpg',
+                  height: 36,
+                  width: 36,
+                  fit: BoxFit.cover,
+                  errorBuilder: (c, e, s) => const SizedBox(),
+                ),
               ),
             ),
             const SizedBox(width: 10),
-            Text('DITrix Attendance Scanner',
-                style: TextStyle(
-                    color: Theme.of(context).appBarTheme.foregroundColor)),
+            // smaller text to fit menus; expands to full label when toggled
+            Text(
+              _appBarTitleExpanded ? 'DITrix Attendance Scanner' : 'DITrix',
+              style: TextStyle(
+                color: Theme.of(context).appBarTheme.foregroundColor,
+                fontSize: 18,
+              ),
+            ),
           ],
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Tutorial',
+            icon: const Icon(Icons.school_outlined),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const TutorialScreen()),
+              );
+            },
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) async {
+              switch (value) {
+                case 'settings':
+                  Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const SettingsScreen()));
+                  break;
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'settings',
+                child: Text('Settings'),
+              ),
+            ],
+          ),
+        ],
       ),
       drawer: Drawer(
         child: Container(
@@ -185,7 +248,41 @@ class _HomeScreenState extends State<HomeScreen> {
                           overflow: TextOverflow.ellipsis,
                         ),
                         subtitle: Text(subtitle),
-                        trailing: const Icon(Icons.chevron_right),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline),
+                              tooltip: 'Delete session',
+                              onPressed: () async {
+                                final confirm = await showDialog<bool>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: const Text('Delete session'),
+                                    content: const Text(
+                                        'Are you sure you want to delete this session? This action cannot be undone.'),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(ctx).pop(false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(ctx).pop(true),
+                                        child: const Text('Delete'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (confirm == true) {
+                                  await _deleteSession(s.id);
+                                }
+                              },
+                            ),
+                            const Icon(Icons.chevron_right),
+                          ],
+                        ),
                         onTap: () async {
                           await Navigator.push(
                             context,
@@ -202,6 +299,50 @@ class _HomeScreenState extends State<HomeScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _startNewSession,
         label: const Text('Capture ID'),
+      ),
+    );
+  }
+}
+
+// Simple tutorial screen added inline
+class TutorialScreen extends StatelessWidget {
+  const TutorialScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Tutorial'),
+        flexibleSpace: Container(
+          decoration: BoxDecoration(gradient: AppGradients.of(context)),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('DITrix Attendance Scanner — Quick Tutorial',
+              style: Theme.of(context)
+                  .textTheme
+                  .headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 12),
+          const Text(
+              '1) Tap "Capture ID" to start a session and take photos of student IDs.'),
+          const SizedBox(height: 8),
+          const Text(
+              '2) OCR extracts the student number and surname automatically. Confirm or correct if needed.'),
+          const SizedBox(height: 8),
+          const Text(
+              '3) Use the session screen to mark present/late and export attendance as CSV/XLSX.'),
+          const SizedBox(height: 8),
+          const Text(
+              '4) Enable Developer Mode in Settings to view diagnostics and logs.'),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Got it'),
+          ),
+        ],
       ),
     );
   }
