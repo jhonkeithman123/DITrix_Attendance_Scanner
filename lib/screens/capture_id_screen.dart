@@ -3,6 +3,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,15 +16,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../scanner_service/scan.dart';
 import '../theme/app_theme.dart';
+import '../models/session.dart';
+import '../services/session_store.dart';
 
 class CaptureIdScreen extends StatefulWidget {
-  const CaptureIdScreen({super.key});
+  final String sessionId;
+  const CaptureIdScreen({super.key, required this.sessionId});
 
   @override
   State<CaptureIdScreen> createState() => _CaptureIdScreenState();
 }
 
-class _CaptureIdScreenState extends State<CaptureIdScreen> {
+class _CaptureIdScreenState extends State<CaptureIdScreen>
+    with WidgetsBindingObserver {
+  final _sessionStore = SessionStore();
+  Session? _session;
+
   DateTime selectedDate = DateTime.now();
   List<Map<String, dynamic>> roster = [];
   Map<String, dynamic>? _lastScan; // last OCR/parse result for debugging
@@ -63,13 +71,29 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _scanner = ScannerService(onLog: _log);
     _loadPrefs();
+    _loadSession();
     _initCamera();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Save when app goes to background or is about to be terminated
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _saveSession(); // fire-and-forget (dispose/lifecycle can’t await)
+    }
+    super.didChangeAppLifecycleState(state);
+  }
+
+  @override
   void dispose() {
+    // Best-effort final save (cannot await in dispose)
+    _saveSession();
+    WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
     super.dispose();
   }
@@ -136,6 +160,42 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
     if (picked != null) setState(() => selectedDate = picked);
   }
 
+  Future<void> _loadSession() async {
+    final s = await _sessionStore.load(widget.sessionId);
+    if (!mounted) return;
+    setState(() {
+      _session = s ?? Session(id: widget.sessionId, createdAt: DateTime.now());
+      subject = _session!.subject;
+      // Parse "HH:mm"
+      TimeOfDay parse(String hhmm) {
+        if (hhmm.isEmpty || !hhmm.contains(':')) {
+          return const TimeOfDay(hour: 0, minute: 0);
+        }
+        final parts = hhmm.split(':');
+        return TimeOfDay(
+            hour: int.tryParse(parts[0]) ?? 0,
+            minute: int.tryParse(parts[1]) ?? 0);
+      }
+
+      classStartTime = parse(_session!.startTime);
+      classEndTime = parse(_session!.endTime);
+      roster = List<Map<String, dynamic>>.from(_session!.roster);
+    });
+  }
+
+  Future<void> _saveSession() async {
+    if (_session == null) return;
+    String toHHMM(TimeOfDay t) =>
+        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    _session!
+      ..subject = subject
+      ..startTime = toHHMM(classStartTime)
+      ..endTime = toHHMM(classEndTime)
+      ..roster = roster;
+    await _sessionStore.save(_session!);
+    _log('[SESSION] saved ${_session!.id}');
+  }
+
   Future<void> _promptSubjectAndTime() async {
     final subjectCtrl = TextEditingController(text: subject);
     TimeOfDay tempStart = classStartTime;
@@ -152,8 +212,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
             children: [
               TextField(
                 controller: subjectCtrl,
-                decoration:
-                    const InputDecoration(labelText: 'Subject (e.g. Math)'),
+                decoration: const InputDecoration(labelText: 'Subject'),
               ),
               const SizedBox(height: 8),
               Row(
@@ -220,6 +279,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
                   _showLogs = true;
                 }
               });
+              await _saveSession();
               final prefs = await SharedPreferences.getInstance();
               await prefs.setBool('developer_mode', _developerMode);
               Navigator.of(ctx).pop();
@@ -337,6 +397,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Loaded ${roster.length} students')));
     }
+    await _saveSession();
   }
 
   List<String> _splitCsvLine(String line) {
@@ -665,6 +726,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
         ));
         _log('[OCR DEBUG] result -> id="$id" name="$name"');
       }
+
+      await _saveSession();
       return {'file': original, 'scan': scanJson};
     } catch (e) {
       debugPrint('cleanAndUpload (Python OCR) error: $e');
@@ -1276,7 +1339,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
                                 const SizedBox(width: 12),
                                 Switch(
                                   value: e['present'] ?? false,
-                                  onChanged: (v) => setState(() {
+                                  onChanged: (v) => setState(() async {
                                     roster[i]['present'] = v;
                                     if (!v) {
                                       roster[i]['time'] = null;
@@ -1286,6 +1349,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen> {
                                       roster[i]['time'] = now.toIso8601String();
                                       roster[i]['status'] = _computeStatus(now);
                                     }
+                                    await _saveSession();
                                   }),
                                 ),
                               ],
