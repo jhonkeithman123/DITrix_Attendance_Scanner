@@ -1,17 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:student_id_scanner/screens/home_screen.dart';
-import 'package:student_id_scanner/widgets/id_scanner_widget.dart';
 
 void main() {
-  testWidgets('HomeScreen has a title and a scanner widget',
-      (WidgetTester tester) async {
+  testWidgets('HomeScreen has a title and a capture button', (tester) async {
     await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+    // Avoid pumpAndSettle; there is a spinning progress indicator during load.
+    await tester.pump(const Duration(milliseconds: 50));
 
-    final titleFinder = find.text('Student ID Scanner');
-    final scannerWidgetFinder = find.byType(IdScannerWidget);
+    // Title (be robust to any future text tweaks)
+    expect(find.textContaining('DITrix'), findsOneWidget);
 
-    expect(titleFinder, findsOneWidget);
-    expect(scannerWidgetFinder, findsOneWidget);
+    // Verify the primary action exists
+    expect(find.widgetWithText(FloatingActionButton, 'Capture ID'),
+        findsOneWidget);
   });
 }

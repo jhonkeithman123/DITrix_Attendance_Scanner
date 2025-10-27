@@ -48,8 +48,10 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   late final ScannerService _scanner;
   final List<String> _uiLogs = <String>[];
   bool _developerMode = false;
-  bool _showLogs = true;
+  bool _showLogs = false;
   void _log(String msg) {
+    // Only collect/print logs in Developer Mode
+    if (!_developerMode) return;
     final now = DateTime.now();
     final h = now.hour.toString().padLeft(2, '0');
     final m = now.minute.toString().padLeft(2, '0');
@@ -102,6 +104,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _developerMode = prefs.getBool('developer_mode') ?? false;
+      _showLogs = _developerMode; // only show logs when Dev Mode is on
     });
   }
 
@@ -121,7 +124,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       if (!mounted) return;
       setState(() => _isCameraInitialized = true);
     } catch (e) {
-      debugPrint('Camera init error: $e');
+      _log('Camera init error: $e');
     }
   }
 
@@ -157,6 +160,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       lastDate: DateTime(2100),
       helpText: 'Select attendance date',
     );
+    if (!mounted) return;
     if (picked != null) setState(() => selectedDate = picked);
   }
 
@@ -274,14 +278,13 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                 classStartTime = tempStart;
                 classEndTime = tempEnd;
                 _developerMode = devTemp;
-                // when enabling developer mode, show logs automatically
-                if (_developerMode) {
-                  _showLogs = true;
-                }
+                // show logs only when Dev Mode is on
+                _showLogs = _developerMode;
               });
               await _saveSession();
               final prefs = await SharedPreferences.getInstance();
               await prefs.setBool('developer_mode', _developerMode);
+              if (!ctx.mounted) return;
               Navigator.of(ctx).pop();
             },
             child: const Text('Save'),
@@ -498,7 +501,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
         imageToUse = res['file'] as File? ?? saved;
         scanResult = res['scan'] as Map<String, dynamic>?;
       } catch (e) {
-        debugPrint('Image clean/upload failed: $e');
+        _log('Image clean/upload failed: $e');
       }
 
       // always store lastScan for UI debug, even if empty
@@ -510,30 +513,28 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final id = (_lastScan?['student_number'] ?? '').toString();
         final name = (_lastScan?['surname'] ?? '').toString();
-        final preview = (_lastScan?['analyzed'] ?? '').toString();
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(id.isEmpty && name.isEmpty
               ? 'OCR empty'
               : 'OCR -> id=$id name=$name'),
           duration: const Duration(seconds: 3),
         ));
-        // also print full preview to console (not truncated)
-        print('[CAPTURE DEBUG] OCR preview: $preview');
+        // dev-only verbose log
+        _log('[OCR PREVIEW] ${(_lastScan?['analyzed'] ?? '').toString()}');
       });
 
-      // verbose console logs for quick inspection
-      debugPrint(
-          '[capture] saved image: ${saved.path} (exists=${await saved.exists()})');
-      debugPrint(
-          '[capture] cleaned image: ${imageToUse.path} (size=${await imageToUse.length()})');
-      debugPrint('[capture] scanResult: ${jsonEncode(_lastScan)}');
+      // dev-only verbose logs
+      _log('[capture] saved=${saved.path} exists=${await saved.exists()}');
+      _log(
+          '[capture] cleaned=${imageToUse.path} size=${await imageToUse.length()}');
+      _log('[capture] scanResult=${jsonEncode(_lastScan)}');
 
       // if OCR returned scan data, try to auto-match and mark attendance
       if (scanResult != null && scanResult.isNotEmpty) {
         setState(() {
           _lastScan = scanResult;
         });
-        debugPrint('[_captureAndTag] scanResult: ${jsonEncode(scanResult)}');
+        _log('[_captureAndTag] scanResult: ${jsonEncode(scanResult)}');
         final scannedNumber = (scanResult['student_number'] ?? '')
             .toString()
             .toLowerCase()
@@ -645,7 +646,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
           }
         }
       } else {
-        debugPrint('[_captureAndTag] no scan result');
+        _log('[_captureAndTag] no scan result');
       }
 
       if (!mounted) return;
@@ -672,7 +673,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
         ),
       );
     } catch (e) {
-      debugPrint('Capture error: $e');
+      _log('Capture error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Capture failed')));
@@ -697,8 +698,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
 
   Future<Map<String, dynamic>> _cleanAndUploadImage(File original) async {
     try {
-      // Delegate all processing + OCR to Python
-      debugPrint('[OCR DEBUG] delegating to Python: ${original.path}');
+      // Delegate OCR; dev-only log
+      _log('[OCR] delegating to engine: ${original.path}');
       _log('[OCR] running on: ${Platform.operatingSystem} (${original.path})');
       final scanJson = await _scanner.runOcr(original);
 
@@ -730,8 +731,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       await _saveSession();
       return {'file': original, 'scan': scanJson};
     } catch (e) {
-      debugPrint('cleanAndUpload (Python OCR) error: $e');
-      _log('cleanAndUpload (Python OCR) error: $e');
+      _log('[OCR] error: $e');
       return {'file': original, 'scan': <String, dynamic>{}};
     }
   }
@@ -835,7 +835,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
             SnackBar(content: Text('Exported CSV to ${file.path}')));
         return;
       } catch (e) {
-        debugPrint('Public export failed: $e');
+        _log('CSV public export failed: $e');
         // fall through to app-documents fallback
       }
     }
@@ -852,7 +852,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Exported CSV to ${fallback.path}')));
     } catch (e) {
-      debugPrint('Final fallback failed: $e');
+      _log('CSV final fallback failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Export failed')));
@@ -977,9 +977,9 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     List<int> bytes;
     try {
       bytes = workbook.saveAsStream();
-    } catch (e, st) {
+    } catch (e) {
       workbook.dispose();
-      debugPrint('XLSX save failed: $e\n$st');
+      _log('XLSX public export failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('XLSX export failed')));
@@ -1028,7 +1028,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
             SnackBar(content: Text('Exported XLSX to ${file.path}')));
         return;
       } catch (e) {
-        debugPrint('XLSX public export failed: $e');
+        _log('XLSX public export failed: $e');
       }
     }
 
@@ -1042,7 +1042,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Exported XLSX to ${fallback.path}')));
     } catch (e) {
-      debugPrint('XLSX final fallback failed: $e');
+      _log('XLSX final fallback failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('XLSX export failed')));
@@ -1068,9 +1068,6 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
             icon: const Icon(Icons.more_vert),
             onSelected: (value) async {
               switch (value) {
-                case 'toggleLogs':
-                  setState(() => _showLogs = !_showLogs);
-                  break;
                 case 'clearLogs':
                   setState(() => _uiLogs.clear());
                   break;
@@ -1092,14 +1089,6 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
               }
             },
             itemBuilder: (ctx) => [
-              PopupMenuItem(
-                value: 'toggleLogs',
-                child: Text(_showLogs ? 'Hide debug logs' : 'Show debug logs'),
-              ),
-              const PopupMenuItem(
-                enabled: false,
-                child: Divider(height: 1),
-              ),
               const PopupMenuItem(
                 value: 'settings',
                 child: Text('Set subject & class time'),
@@ -1290,8 +1279,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                                           const SizedBox(width: 8),
                                           Container(
                                             decoration: BoxDecoration(
-                                              color:
-                                                  chipColor.withOpacity(0.15),
+                                              color: chipColor.withValues(
+                                                  alpha: 0.15),
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                             ),
@@ -1339,18 +1328,22 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                                 const SizedBox(width: 12),
                                 Switch(
                                   value: e['present'] ?? false,
-                                  onChanged: (v) => setState(() async {
-                                    roster[i]['present'] = v;
-                                    if (!v) {
-                                      roster[i]['time'] = null;
-                                      roster[i]['status'] = null;
-                                    } else {
-                                      final now = DateTime.now();
-                                      roster[i]['time'] = now.toIso8601String();
-                                      roster[i]['status'] = _computeStatus(now);
-                                    }
+                                  onChanged: (v) async {
+                                    setState(() {
+                                      roster[i]['present'] = v;
+                                      if (!v) {
+                                        roster[i]['time'] = null;
+                                        roster[i]['status'] = null;
+                                      } else {
+                                        final now = DateTime.now();
+                                        roster[i]['time'] =
+                                            now.toIso8601String();
+                                        roster[i]['status'] =
+                                            _computeStatus(now);
+                                      }
+                                    });
                                     await _saveSession();
-                                  }),
+                                  },
                                 ),
                               ],
                             ),

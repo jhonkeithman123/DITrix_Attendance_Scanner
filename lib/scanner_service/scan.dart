@@ -186,7 +186,9 @@ class ScannerService {
           if (w.length < 3 || w.length > 14) continue;
           if (_blacklist.contains(w.toLowerCase())) continue;
           if (RegExp(r'philipp|philip|phillip', caseSensitive: false)
-              .hasMatch(w)) continue;
+              .hasMatch(w)) {
+            continue;
+          }
           if (RegExp(r'(.)\1\1', caseSensitive: false).hasMatch(w)) continue;
           if (!nearId && bandY > 0) continue;
           final h = el.boundingBox.height;

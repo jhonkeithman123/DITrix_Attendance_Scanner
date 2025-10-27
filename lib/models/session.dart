@@ -17,7 +17,7 @@ class Session {
 
   Map<String, dynamic> toJson() => {
         'id': id,
-        'createdAt': createdAt,
+        'createdAt': createdAt.toIso8601String(),
         'subject': subject,
         'startTime': startTime,
         'endTime': endTime,

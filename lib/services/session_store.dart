@@ -28,7 +28,7 @@ class SessionStore {
     final stamp =
         '${now.year.toString().padLeft(4, '0')}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_'
         '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
-    final rnd = {now.microsecondsSinceEpoch % 10000}.toString().padLeft(4, '0');
+    final rnd = (now.microsecondsSinceEpoch % 10000).toString().padLeft(4, '0');
     final id = '${stamp}_$rnd';
     final s = Session(id: id, createdAt: now);
     await save(s);
@@ -37,13 +37,12 @@ class SessionStore {
 
   Future<void> save(Session s) async {
     final f = await _fileForId(s.id);
-    await f
-        .writeAsString(const JsonEncoder.withIndent('  ').convert(s.toJson()));
+    final jsonStr = const JsonEncoder.withIndent('  ').convert(s.toJson());
+    await f.writeAsString(jsonStr);
   }
 
   Future<Session?> load(String id) async {
     final f = await _fileForId(id);
-
     if (!await f.exists()) return null;
     final txt = await f.readAsString();
     return Session.fromJson(jsonDecode(txt) as Map<String, dynamic>);
