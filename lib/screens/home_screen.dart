@@ -30,7 +30,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _updateUrl;
 
   static const String _versionCheckUrl =
-      "https://github.com/jhonkeithman123/DITrix_Attendance_Scanner/blob/main/app-version.json";
+      "https://raw.githubusercontent.com/jhonkeithman123/DITrix_Attendance_Scanner/main/app-version.json";
 
   @override
   void initState() {
