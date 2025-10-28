@@ -8,13 +8,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:syncfusion_flutter_xlsio/xlsio.dart' as xlsio;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../scanner_service/scan.dart';
+import '../services/file_io_service.dart';
 import '../theme/app_theme.dart';
 import '../models/session.dart';
 import '../services/session_store.dart';
@@ -65,6 +63,20 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     if (_isCapturing) return;
     _isCapturing = true;
     try {
+      _log(
+          'attemptAutoCapture: starting. burst=$_burstMode count=$_burstCount');
+      // Some camera plugin versions require stopping imageStream before takePicture
+      var wasStreaming = false;
+      try {
+        if (_cameraController!.value.isStreamingImages) {
+          await _cameraController!.stopImageStream();
+          wasStreaming = true;
+          _log('stopped image stream before capture');
+        }
+      } catch (e) {
+        _log('stopImageStream failed: $e');
+      }
+
       if (_burstMode && _burstCount > 1) {
         for (var i = 0; i < _burstCount; i++) {
           // use the same capture pipeline you already have
@@ -75,6 +87,18 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       } else {
         await _captureAndTag();
       }
+
+      // restart stream if we stopped it
+      if (wasStreaming) {
+        try {
+          _cameraController!
+              .startImageStream((img) => _focusDetector.handleImage(img));
+          _log('restarted image stream after capture');
+        } catch (e) {
+          _log('restart image stream failed: $e');
+        }
+      }
+
       _lastAutoCaptureAt = DateTime.now();
     } catch (e) {
       _log('auto-capture failed: $e');
@@ -352,81 +376,14 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     );
   }
 
-  Future<void> _loadMasterlist() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['csv'],
-      withData: true,
-    );
-    if (result == null) return;
-
-    final bytes = result.files.first.bytes;
-    if (bytes == null) return;
-
-    final content = utf8.decode(bytes);
-    final lines = LineSplitter()
-        .convert(content)
-        .map((l) => l.trim())
-        .where((l) => l.isNotEmpty)
-        .toList();
-    if (lines.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Empty masterlist')));
-      }
-      return;
-    }
-
-    final first = lines.first;
-    List<Map<String, String>> parsed = [];
-
-    final headerLower = first.toLowerCase();
-    if (headerLower.contains('id') && headerLower.contains('name')) {
-      final headers =
-          _splitCsvLine(first).map((h) => h.trim().toLowerCase()).toList();
-      final idIdx = headers.indexWhere((h) => h.contains('id'));
-      final nameIdx = headers.indexWhere((h) => h.contains('name'));
-      if (idIdx == -1 || nameIdx == -1) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Masterlist header must include id and name')));
-        }
-        return;
-      }
-
-      for (var i = 1; i < lines.length; i++) {
-        final cols = _splitCsvLine(lines[i]);
-        final id = cols.length > idIdx ? cols[idIdx].trim() : '';
-        final name = cols.length > nameIdx ? cols[nameIdx].trim() : '';
-        if (id.isNotEmpty && name.isNotEmpty) {
-          parsed.add({'id': id, 'name': name});
-        }
-      }
-    } else {
-      for (final l in lines) {
-        final cols = _splitCsvLine(l);
-        if (cols.length >= 2) {
-          final a = cols[0].trim();
-          final b = cols[1].trim();
-
-          final probableId = _looksLikeId(a) ? a : (_looksLikeId(b) ? b : a);
-          final probableName = probableId == a ? b : a;
-          if (probableId.isNotEmpty && probableName.isNotEmpty) {
-            parsed.add({'id': probableId, 'name': probableName});
-          }
-        }
-      }
-    }
-
+  // helper to apply parsed masterlist into roster (ensure sorted by last name)
+  Future<void> _applyParsedMasterlist(List<Map<String, String>> parsed) async {
     if (parsed.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content:
-                Text('Masterlist must include student id and name (CSV)')));
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Empty masterlist')));
       return;
     }
-
     if (!mounted) return;
     setState(() {
       roster = parsed
@@ -438,56 +395,35 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                 'status': null
               })
           .toList();
-
-      // helper: pick surname from either "Surname, First ..." or "First ... Last"
-      // ignore: no_leading_underscores_for_local_identifiers
-      String _surnameKey(Map<String, dynamic> e) {
-        final name = (e['name'] ?? '').toString().trim();
-        if (name.isEmpty) return '';
-        if (name.contains(',')) {
-          // "Surname, First Middle" -> surname before comma
-          return name.split(',')[0].trim().toLowerCase();
-        }
-        final parts = name.split(RegExp(r'\s+'));
-        return parts.isNotEmpty ? parts.last.toLowerCase() : name.toLowerCase();
-      }
-
-      roster.sort((a, b) => _surnameKey(a).compareTo(_surnameKey(b)));
     });
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Loaded ${roster.length} students')));
-    }
     await _saveSession();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Loaded ${roster.length} students')));
   }
 
-  List<String> _splitCsvLine(String line) {
-    final List<String> result = [];
-    final buffer = StringBuffer();
-    bool inQuote = false;
-    for (int i = 0; i < line.length; i++) {
-      final ch = line[i];
-      if (ch == '"') {
-        inQuote = !inQuote;
-        continue;
-      }
-      if (ch == ',' && !inQuote) {
-        result.add(buffer.toString());
-        buffer.clear();
-      } else {
-        buffer.write(ch);
-      }
+  // load CSV directly (used by popup menu)
+  Future<void> _loadMasterlistCsv() async {
+    try {
+      final parsed = await FileIOService.pickMasterlistCsv();
+      await _applyParsedMasterlist(parsed);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('CSV load failed: $e')));
     }
-    result.add(buffer.toString());
-    return result;
   }
 
-  bool _looksLikeId(String s) {
-    if (s.isEmpty) return false;
-
-    final hasDigit = s.contains(RegExp(r'\d'));
-    final shortToken = s.length < 6;
-    return hasDigit || shortToken;
+  // load XLSX directly (used by popup menu)
+  Future<void> _loadMasterlistXlsx() async {
+    try {
+      final parsed = await FileIOService.pickMasterlistXlsx();
+      await _applyParsedMasterlist(parsed);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('XLSX load failed: $e')));
+    }
   }
 
   void _simulateCaptureOne() {
@@ -535,6 +471,35 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   }
 
   Future<void> _captureAndTag() async {
+    // Require subject and class times to be set before capturing
+    final missingSubject = subject.trim().isEmpty;
+    final missingStart =
+        (classStartTime.hour == 0 && classStartTime.minute == 0);
+    final missingEnd = (classEndTime.hour == 0 && classEndTime.minute == 0);
+    if (missingSubject || missingStart || missingEnd) {
+      if (!mounted) return;
+      final doSet = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Set subject and times'),
+          content: const Text(
+              'Please set the Subject, Class start and Class dismiss times before capturing IDs.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Later')),
+            ElevatedButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Set now')),
+          ],
+        ),
+      );
+      if (doSet == true) {
+        await _promptSubjectAndTime();
+      }
+      return;
+    }
+
     if (!_cameraEnabled || !_isCameraInitialized || _cameraController == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -817,103 +782,40 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   }
 
   Future<void> _exportCsv() async {
-    if (roster.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content:
-                Text('Roster empty - load a masterlist or add names first')));
-      }
-      return;
-    }
-
-    if (subject.trim().isEmpty ||
-        (classStartTime.hour == 0 && classStartTime.minute == 0) ||
-        (classEndTime.hour == 0 && classEndTime.minute == 0)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Please set Subject and Subject Time before exporting'),
-        ));
-      }
-      return;
-    }
-
-    final csvLines = <String>[];
-    // include subject, subject time (class start), subject dismiss (end), then student data and time in
-    csvLines.add(
-        'Subject,Subject Time,Subject Dismiss,Student ID,Student Name,Time In,Status');
-    final subjEscaped = subject.replaceAll('"', '""');
-    final subjTimeEscaped =
-        classStartTime.format(context).replaceAll('"', '""');
-    final subjDismissEscaped =
-        classEndTime.format(context).replaceAll('"', '""');
-    for (final row in roster) {
-      final idEscaped = row['id']?.toString().replaceAll('"', '""') ?? '';
-      final nameEscaped = row['name']?.toString().replaceAll('"', '""') ?? '';
-      final timeIn = row['time']?.toString() ?? '';
-      final status = row['status']?.toString() ??
-          (row['present'] == true ? 'Present' : 'Absent');
-      csvLines.add(
-          '"$subjEscaped","$subjTimeEscaped","$subjDismissEscaped","$idEscaped","$nameEscaped","$timeIn","$status"');
-    }
-    final csv = csvLines.join('\n');
-
-    final ts = DateTime.now().toIso8601String().replaceAll(':', '-');
-
-    // Try to write to public Documents (Android) first
-    if (Platform.isAndroid) {
-      try {
-        // request manage external storage (Android 11+) or storage permission
-        PermissionStatus manageStatus =
-            await Permission.manageExternalStorage.status;
-        if (!manageStatus.isGranted) {
-          manageStatus = await Permission.manageExternalStorage.request();
-        }
-        if (!manageStatus.isGranted) {
-          // fallback to legacy storage permission
-          final storageStatus = await Permission.storage.request();
-          if (!storageStatus.isGranted) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text(
-                      'Storage permission required to export to Documents')));
-            }
-            return;
-          }
-        }
-
-        final publicDir =
-            Directory('/storage/emulated/0/Documents/DITrix attendance');
-        if (!await publicDir.exists()) await publicDir.create(recursive: true);
-        final file = File(
-            '${publicDir.path}/attendance_${subject.isNotEmpty ? "${subject.replaceAll(RegExp(r'[^\w\-]'), '_')}_" : ""}$ts.csv');
-        await file.writeAsString(csv, flush: true);
-
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Exported CSV to ${file.path}')));
-        return;
-      } catch (e) {
-        _log('CSV public export failed: $e');
-        // fall through to app-documents fallback
-      }
-    }
-
-    // Final fallback: app documents folder
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final targetDir = Directory('${appDir.path}/DITrix attendance');
-      if (!await targetDir.exists()) await targetDir.create(recursive: true);
-      final fallback = File(
-          '${targetDir.path}/attendance_${subject.isNotEmpty ? "${subject.replaceAll(RegExp(r'[^\w\-]'), '_')}_" : ""}$ts.csv');
-      await fallback.writeAsString(csv, flush: true);
+      if (roster.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content:
+                  Text('Roster empty - load a masterlist or add names first')));
+        }
+        return;
+      }
+      if (subject.trim().isEmpty ||
+          (classStartTime.hour == 0 && classStartTime.minute == 0) ||
+          (classEndTime.hour == 0 && classEndTime.minute == 0)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content:
+                Text('Please set Subject and Subject Time before exporting'),
+          ));
+        }
+        return;
+      }
+      final path = await FileIOService.exportCsv(
+        roster: roster,
+        subject: subject,
+        startTime: classStartTime.format(context),
+        dismissTime: classEndTime.format(context),
+      );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Exported CSV to ${fallback.path}')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Exported CSV to $path')));
     } catch (e) {
-      _log('CSV final fallback failed: $e');
+      _log('CSV export failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Export failed')));
+            .showSnackBar(SnackBar(content: Text('Export failed: $e')));
       }
     }
   }
@@ -948,162 +850,21 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   }
 
   Future<void> _exportXlsx() async {
-    if (roster.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content:
-                Text('Roster empty - load a masterlist or add names first')));
-      }
-      return;
-    }
-
-    if (subject.trim().isEmpty ||
-        (classStartTime.hour == 0 && classStartTime.minute == 0) ||
-        (classEndTime.hour == 0 && classEndTime.minute == 0)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-              'Please set Subject, Subject Time and Dismiss before exporting'),
-        ));
-      }
-      return;
-    }
-
-    // create XLSX using syncfusion_flutter_xlsio so we can set column widths / wrap text
-    final workbook = xlsio.Workbook();
-    final sheet = workbook.worksheets[0];
-    sheet.name = 'Attendance';
-
-    final headers = [
-      'Subject',
-      'Subject Time',
-      'Subject Dismiss',
-      'Student ID',
-      'Student Name',
-      'Time In',
-      'Status'
-    ];
-
-    // header row (1-based indices)
-    for (var c = 0; c < headers.length; c++) {
-      final cell = sheet.getRangeByIndex(1, c + 1);
-      cell.setText(headers[c]);
-      cell.cellStyle.bold = true;
-      cell.cellStyle.wrapText = true;
-      // small padding by increasing row height a bit
-    }
-
-    // rows and compute max length per column to set widths
-    final maxLens = List<int>.filled(headers.length, 0);
-    String safeStr(Object? v) => v == null ? '' : v.toString();
-
-    final subj = subject;
-    final subjTime = classStartTime.format(context);
-    final subjDismiss = classEndTime.format(context);
-
-    for (var r = 0; r < roster.length; r++) {
-      final row = roster[r];
-      final values = [
-        subj,
-        subjTime,
-        subjDismiss,
-        safeStr(row['id']),
-        safeStr(row['name']),
-        safeStr(row['time']),
-        safeStr(
-            row['status'] ?? (row['present'] == true ? 'Present' : 'Absent')),
-      ];
-      for (var c = 0; c < values.length; c++) {
-        final v = values[c];
-        final cell = sheet.getRangeByIndex(r + 2, c + 1);
-        cell.setText(v);
-        cell.cellStyle.wrapText = true;
-        if (v.length > maxLens[c]) maxLens[c] = v.length;
-      }
-    }
-
-    // set approximate column widths based on max text length
-    for (var c = 0; c < maxLens.length; c++) {
-      // Excel width units ≈ character count; add padding, clamp to sensible range
-      final width = ((maxLens[c] + 5).clamp(10, 60)).toDouble();
-      try {
-        sheet.getRangeByIndex(1, c + 1).columnWidth = width;
-      } catch (_) {}
-    }
-
-    // save workbook and handle errors — saveAsStream() returns a List<int>, not null
-    List<int> bytes;
     try {
-      bytes = workbook.saveAsStream();
-    } catch (e) {
-      workbook.dispose();
-      _log('XLSX public export failed: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('XLSX export failed')));
-      }
-      return;
-    }
-    workbook.dispose();
-    if (bytes.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('XLSX export produced empty file')));
-      }
-      return;
-    }
-
-    final ts = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final fileName =
-        'attendance_${subject.isNotEmpty ? "${subject.replaceAll(RegExp(r'[^\w\-]'), '_')}_" : ""}$ts.xlsx';
-
-    // write similar to CSV: try public Documents then app documents
-    if (Platform.isAndroid) {
-      try {
-        PermissionStatus manageStatus =
-            await Permission.manageExternalStorage.status;
-        if (!manageStatus.isGranted) {
-          manageStatus = await Permission.manageExternalStorage.request();
-        }
-        if (!manageStatus.isGranted) {
-          final storageStatus = await Permission.storage.request();
-          if (!storageStatus.isGranted) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('Storage permission required to export XLSX')));
-            }
-            return;
-          }
-        }
-
-        final publicDir =
-            Directory('/storage/emulated/0/Documents/DITrix attendance');
-        if (!await publicDir.exists()) await publicDir.create(recursive: true);
-        final file = File('${publicDir.path}/$fileName');
-        await file.writeAsBytes(bytes, flush: true);
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Exported XLSX to ${file.path}')));
-        return;
-      } catch (e) {
-        _log('XLSX public export failed: $e');
-      }
-    }
-
-    try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final targetDir = Directory('${appDir.path}/DITrix attendance');
-      if (!await targetDir.exists()) await targetDir.create(recursive: true);
-      final fallback = File('${targetDir.path}/$fileName');
-      await fallback.writeAsBytes(bytes, flush: true);
+      final path = await FileIOService.exportXlsx(
+        roster: roster,
+        subject: subject,
+        startTime: classStartTime.format(context),
+        dismissTime: classEndTime.format(context),
+      );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Exported XLSX to ${fallback.path}')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Exported XLSX to $path')));
     } catch (e) {
-      _log('XLSX final fallback failed: $e');
+      _log('XLSX export failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('XLSX export failed')));
+            .showSnackBar(SnackBar(content: Text('Export failed: $e')));
       }
     }
   }
@@ -1139,7 +900,10 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                   await _toggleCamera();
                   break;
                 case 'loadCsv':
-                  await _loadMasterlist();
+                  await _loadMasterlistCsv();
+                  break;
+                case 'loadXlsx':
+                  await _loadMasterlistXlsx();
                   break;
                 case 'export':
                   await _exportPrompt();
@@ -1159,6 +923,10 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
               const PopupMenuItem(
                 value: 'loadCsv',
                 child: Text('Load masterlist (CSV)'),
+              ),
+              const PopupMenuItem(
+                value: 'loadXlsx',
+                child: Text('Load masterlist (XLSX)'),
               ),
               const PopupMenuItem(
                 value: 'export',

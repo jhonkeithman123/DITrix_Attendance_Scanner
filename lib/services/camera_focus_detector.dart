@@ -1,4 +1,5 @@
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 
 // Lightweight focus/scene-change detector based on luminance variance.
 // Call [handleImage] from camera image stream. It will call [onFocus]
@@ -46,9 +47,13 @@ class CameraFocusDetector {
     final mean = sum / count;
     final variance = (sum2 / count) - (mean * mean);
 
+    debugPrint(
+        '[FocusDetector] variance=${variance.toStringAsFixed(1)} threshold=$varianceThreshold');
+
     if (variance > varianceThreshold) {
       _lastTriggered = now;
 
+      debugPrint('[FocusDetector] triggered focus callback');
       try {
         onFocus();
       } catch (_) {}

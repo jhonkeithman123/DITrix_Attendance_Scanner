@@ -167,12 +167,6 @@ class _AboutScreenState extends State<AboutScreen> {
                                 _version.isEmpty ? null : 'v$_version',
                           ),
                         ),
-                        TextButton.icon(
-                          icon: const Icon(Icons.settings),
-                          label: const Text('Settings'),
-                          onPressed: () =>
-                              Navigator.pushNamed(context, '/settings'),
-                        ),
                       ],
                     ),
                   ),

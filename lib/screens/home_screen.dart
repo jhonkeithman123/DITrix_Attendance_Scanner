@@ -135,28 +135,29 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(width: 10),
-            // AnimatedSize ensures smooth width change; AnimatedSwitcher adds fade
-            AnimatedSize(
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-              child: ConstrainedBox(
-                // limit width so actions still fit; adjust maxWidth as needed
-                constraints:
-                    BoxConstraints(maxWidth: _appBarTitleExpanded ? 260 : 84),
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  transitionBuilder: (child, anim) =>
-                      FadeTransition(opacity: anim, child: child),
-                  child: Text(
-                    _appBarTitleExpanded
-                        ? 'DITrix Attendance Scanner'
-                        : 'DITrix',
-                    key: ValueKey<bool>(_appBarTitleExpanded),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                    style: TextStyle(
-                      color: Theme.of(context).appBarTheme.foregroundColor,
-                      fontSize: 18,
+            // make the title flexible so it can shrink and avoid overflow
+            Flexible(
+              child: AnimatedSize(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOut,
+                child: ConstrainedBox(
+                  constraints:
+                      BoxConstraints(maxWidth: _appBarTitleExpanded ? 260 : 84),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    transitionBuilder: (child, anim) =>
+                        FadeTransition(opacity: anim, child: child),
+                    child: Text(
+                      _appBarTitleExpanded
+                          ? 'DITrix Attendance Scanner'
+                          : 'DITrix',
+                      key: ValueKey<bool>(_appBarTitleExpanded),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: Theme.of(context).appBarTheme.foregroundColor,
+                        fontSize: 18,
+                      ),
                     ),
                   ),
                 ),
@@ -164,37 +165,61 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: 'Tutorial',
-            icon: const Icon(Icons.school_outlined),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const TutorialScreen()),
-              );
-            },
-          ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert),
-            onSelected: (value) async {
-              switch (value) {
-                case 'settings':
+      ),
+      // moved bottom action bar out of AppBar and into Scaffold
+      bottomNavigationBar: BottomAppBar(
+        child: Container(
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(gradient: AppGradients.of(context)),
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: 'Tutorial',
+                icon: const Icon(Icons.school_outlined),
+                color: Theme.of(context).colorScheme.onPrimary,
+                onPressed: () {
                   Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const SettingsScreen()));
-                  break;
-              }
-            },
-            itemBuilder: (ctx) => [
-              const PopupMenuItem(
-                value: 'settings',
-                child: Text('Settings'),
+                    context,
+                    MaterialPageRoute(builder: (_) => const TutorialScreen()),
+                  );
+                },
+              ),
+              const SizedBox(width: 8),
+              if (_updateAvailable)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Text('Update v$_latestVersion',
+                      style: TextStyle(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onPrimary
+                              .withValues(alpha: 0.95))),
+                ),
+              const Spacer(),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert),
+                color: Theme.of(context).colorScheme.onPrimary,
+                onSelected: (value) async {
+                  switch (value) {
+                    case 'settings':
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const SettingsScreen()));
+                      break;
+                  }
+                },
+                itemBuilder: (ctx) => [
+                  const PopupMenuItem(
+                    value: 'settings',
+                    child: Text('Settings'),
+                  ),
+                ],
               ),
             ],
           ),
-        ],
+        ),
       ),
       drawer: Drawer(
         child: Container(
