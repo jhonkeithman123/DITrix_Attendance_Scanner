@@ -2,8 +2,8 @@
     "latest_version": "1.1.0",
     "minimum_required_version": "1.0.1",
     "update_urls": {
-        "arm64-v8a": "https://github.com/jhonkeithman123/DITrix_Attendance_Scanner/releases/download/V1.0/app-arm64-v8a-release.apk",
-        "armeabi-v7a": "https://github.com/jhonkeithman123/DITrix_Attendance_Scanner/releases/download/V1.0/app-armeabi-v7a-release.apk",
-        "x86_64": "https://github.com/jhonkeithman123/DITrix_Attendance_Scanner/releases/download/V1.0/app-x86_64-release.apk"
+        "arm64-v8a": "https://github.com/jhonkeithman123/DITrix_Attendance_Scanner/releases/download/1.1.0/DITrix_Attendance_Scanner-arm64-v8a.apk",
+        "armeabi-v7a": "https://github.com/jhonkeithman123/DITrix_Attendance_Scanner/releases/download/1.1.0/DITrix_Attendance_Scanner-armeabi-v7a.apk",
+        "x86_64": "https://github.com/jhonkeithman123/DITrix_Attendance_Scanner/releases/download/1.1.0/DITrix_Attendance_Scanner-x86_64.apk"
     }
 }
