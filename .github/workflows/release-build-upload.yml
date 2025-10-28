@@ -38,4 +38,4 @@ jobs:
             build/app/outputs/apk/release/DITrix_Attendance_Scanner-armeabi-v7a.apk
             build/app/outputs/apk/release/DITrix_Attendance_Scanner-x86_64.apk
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
