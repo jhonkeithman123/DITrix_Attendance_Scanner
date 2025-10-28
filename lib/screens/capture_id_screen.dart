@@ -18,6 +18,7 @@ import '../scanner_service/scan.dart';
 import '../theme/app_theme.dart';
 import '../models/session.dart';
 import '../services/session_store.dart';
+import '../services/camera_focus_detector.dart';
 
 class CaptureIdScreen extends StatefulWidget {
   final String sessionId;
@@ -44,6 +45,43 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
   bool _cameraEnabled = true; // Toggle for manual on/off
+
+  // Focus detector (extracted to its own file)
+  late final CameraFocusDetector _focusDetector;
+
+  // Auto-capture / burst control
+  final bool _autoCapture = false;
+  final bool _burstMode = false;
+  final int _burstCount = 3;
+  bool _isCapturing = false; // guard to avoid overlapping captures
+  DateTime? _lastAutoCaptureAt;
+  final Duration _autoCaptureCooldown = const Duration(seconds: 2);
+
+  /// Attempt an auto-capture. Uses existing _captureAndTag for processing.
+  Future<void> _attemptAutoCapture() async {
+    if (!_cameraEnabled || !_isCameraInitialized || _cameraController == null) {
+      return;
+    }
+    if (_isCapturing) return;
+    _isCapturing = true;
+    try {
+      if (_burstMode && _burstCount > 1) {
+        for (var i = 0; i < _burstCount; i++) {
+          // use the same capture pipeline you already have
+          await _captureAndTag();
+          // small spacing between burst captures
+          await Future.delayed(const Duration(milliseconds: 250));
+        }
+      } else {
+        await _captureAndTag();
+      }
+      _lastAutoCaptureAt = DateTime.now();
+    } catch (e) {
+      _log('auto-capture failed: $e');
+    } finally {
+      _isCapturing = false;
+    }
+  }
 
   late final ScannerService _scanner;
   final List<String> _uiLogs = <String>[];
@@ -78,6 +116,18 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     _loadPrefs();
     _loadSession();
     _initCamera();
+    // create detector but don't reference camera here; it will be used after init
+    _focusDetector = CameraFocusDetector(
+      onFocus: () {
+        // only trigger capture if auto-capture is enabled and camera is available
+        if (_cameraEnabled && _isCameraInitialized && _autoCapture == true) {
+          _attemptAutoCapture();
+        }
+      },
+      varianceThreshold: 150.0,
+      step: 20,
+      cooldown: const Duration(seconds: 2),
+    );
   }
 
   @override
@@ -97,6 +147,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     _saveSession();
     WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
+    _focusDetector.dispose();
     super.dispose();
   }
 
@@ -121,6 +172,13 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       _cameraController =
           CameraController(cam, ResolutionPreset.medium, enableAudio: false);
       await _cameraController!.initialize();
+      // start streaming frames into the extracted focus detector
+      try {
+        _cameraController!
+            .startImageStream((img) => _focusDetector.handleImage(img));
+      } catch (_) {
+        // some devices/plugins don't support simultaneous stream+takePicture
+      }
       if (!mounted) return;
       setState(() => _isCameraInitialized = true);
     } catch (e) {

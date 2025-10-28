@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'about_screen.dart';
 import 'capture_id_screen.dart';
@@ -6,6 +7,7 @@ import '../theme/app_theme.dart';
 import 'settings_screen.dart';
 import '../services/session_store.dart';
 import '../models/session.dart';
+import '../services/version_checker.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,10 +23,45 @@ class _HomeScreenState extends State<HomeScreen> {
   // new: control appbar title expansion when tapping the logo
   bool _appBarTitleExpanded = false;
 
+  // ignore: unused_field
+  bool _updateAvailable = false;
+  // ignore: unused_field
+  String _latestVersion = '';
+  String? _updateUrl;
+
+  static const String _versionCheckUrl =
+      "https://github.com/jhonkeithman123/DITrix_Attendance_Scanner/blob/main/app-version.json";
+
   @override
   void initState() {
     super.initState();
     _refresh();
+    _checkForUpdate();
+  }
+
+  Future<void> _checkForUpdate() async {
+    try {
+      final checker = VersionChecker(checkUrl: _versionCheckUrl);
+      final info = await checker.check();
+
+      if (!mounted) return;
+
+      setState(() {
+        _updateAvailable = info.updateAvailable;
+        _latestVersion = info.latestVersion;
+        _updateUrl = info.updateUrl;
+      });
+    } catch (e) {
+      // ignore networks for now
+    }
+  }
+
+  Future<void> _openUpdateUrl() async {
+    if (_updateUrl == null) return;
+    final uri = Uri.parse(_updateUrl!);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   Future<void> _refresh() async {
@@ -78,7 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
         flexibleSpace: Container(
           decoration: BoxDecoration(gradient: AppGradients.of(context)),
         ),
-        // logo + compact title. Tapping the logo toggles full title.
+        // logo + animated title (size + fade). Tapping the logo toggles full title.
         title: Row(
           children: [
             InkWell(
@@ -98,12 +135,31 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(width: 10),
-            // smaller text to fit menus; expands to full label when toggled
-            Text(
-              _appBarTitleExpanded ? 'DITrix Attendance Scanner' : 'DITrix',
-              style: TextStyle(
-                color: Theme.of(context).appBarTheme.foregroundColor,
-                fontSize: 18,
+            // AnimatedSize ensures smooth width change; AnimatedSwitcher adds fade
+            AnimatedSize(
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+              child: ConstrainedBox(
+                // limit width so actions still fit; adjust maxWidth as needed
+                constraints:
+                    BoxConstraints(maxWidth: _appBarTitleExpanded ? 260 : 84),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 220),
+                  transitionBuilder: (child, anim) =>
+                      FadeTransition(opacity: anim, child: child),
+                  child: Text(
+                    _appBarTitleExpanded
+                        ? 'DITrix Attendance Scanner'
+                        : 'DITrix',
+                    key: ValueKey<bool>(_appBarTitleExpanded),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: Theme.of(context).appBarTheme.foregroundColor,
+                      fontSize: 18,
+                    ),
+                  ),
+                ),
               ),
             ),
           ],
@@ -201,6 +257,59 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
+
+              // Update reminder tile (shows only when update available)
+              if (_updateAvailable)
+                ListTile(
+                  leading: Stack(
+                    alignment: Alignment.topRight,
+                    children: [
+                      Icon(Icons.system_update,
+                          color: Theme.of(context).colorScheme.secondary),
+                      // small red dot badge
+                      Positioned(
+                        right: -2,
+                        top: -2,
+                        child: Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  title: Text('Update available',
+                      style: TextStyle(color: onSurface)),
+                  subtitle: Text('v$_latestVersion',
+                      style:
+                          TextStyle(color: onSurface.withValues(alpha: 0.9))),
+                  onTap: () async {
+                    // show dialog with details and action
+                    final open = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Update available'),
+                        content: Text(
+                            'A newer version (v$_latestVersion) is available. Would you like to update now?'),
+                        actions: [
+                          TextButton(
+                              onPressed: () => Navigator.of(ctx).pop(false),
+                              child: const Text('Later')),
+                          TextButton(
+                              onPressed: () => Navigator.of(ctx).pop(true),
+                              child: const Text('Update')),
+                        ],
+                      ),
+                    );
+                    if (open == true) {
+                      await _openUpdateUrl();
+                    }
+                  },
+                ),
+
               ListTile(
                 leading: Icon(Icons.info, color: secondary),
                 title: Text('About', style: TextStyle(color: onSurface)),
