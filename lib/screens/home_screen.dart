@@ -8,6 +8,7 @@ import 'settings_screen.dart';
 import '../services/session_store.dart';
 import '../models/session.dart';
 import '../services/version_checker.dart';
+import '../utils/app_notifier.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -51,16 +52,56 @@ class _HomeScreenState extends State<HomeScreen> {
         _latestVersion = info.latestVersion;
         _updateUrl = info.updateUrl;
       });
+
+      // show user-visible message on every check/refresh using AppNotifier
+      final message = info.updateAvailable
+          ? 'Update available: v${info.latestVersion}'
+          : 'App is up to date (v${info.currentVersion})';
+
+      final action = info.updateAvailable && _updateUrl != null
+          ? SnackBarAction(label: 'Update', onPressed: () => _openUpdateUrl())
+          : null;
+
+      if (mounted) AppNotifier.showSnack(context, message, action: action);
     } catch (e) {
-      // ignore networks for now
+      if (mounted) {
+        AppNotifier.showSnack(context, 'Version check failed: $e');
+      }
     }
   }
 
   Future<void> _openUpdateUrl() async {
-    if (_updateUrl == null) return;
-    final uri = Uri.parse(_updateUrl!);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (_updateUrl == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No update URL available')));
+      }
+      return;
+    }
+
+    final uri = Uri.tryParse(_updateUrl!);
+    if (uri == null) {
+      if (mounted) {
+        AppNotifier.showSnack(context, 'Malformed Url');
+      }
+      return;
+    }
+
+    try {
+      // Prefer external application; some platforms may return false so fallback.
+      var launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched) {
+        launched = await launchUrl(uri);
+      }
+      if (!launched && mounted) {
+        AppNotifier.showSnack(
+            context, 'Could not open update URL: ${uri.toString()}');
+      }
+    } catch (e) {
+      // show a short debug/feedback message
+      if (mounted) {
+        AppNotifier.showSnack(context, 'Failed to open update URL');
+      }
     }
   }
 
@@ -89,15 +130,11 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await _store.delete(id);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Session deleted')),
-      );
+      AppNotifier.showSnack(context, 'Session deleted');
       await _refresh();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to delete session: $e')),
-      );
+      AppNotifier.showSnack(context, 'Failed to delete session: $e');
     }
   }
 

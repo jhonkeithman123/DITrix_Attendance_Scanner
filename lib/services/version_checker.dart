@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -20,16 +21,29 @@ class VersionChecker {
   // URL that returns JSON: {"latest":"1.2.3", "url":"https://..."}
   final String checkUrl;
   final Duration timeout;
+  final http.Client _httpClient;
+  final String? _currentVersionOverride;
 
-  VersionChecker(
-      {required this.checkUrl, this.timeout = const Duration(seconds: 6)});
+  VersionChecker({
+    required this.checkUrl,
+    this.timeout = const Duration(seconds: 6),
+    http.Client? httpClient,
+    String? currentVersionOverride,
+  })  : _httpClient = httpClient ?? http.Client(),
+        _currentVersionOverride = currentVersionOverride;
 
   Future<UpdateInfo> check() async {
-    final pkg = await PackageInfo.fromPlatform();
-    final current = pkg.version;
+    // Order of precedence for current version:
+    // 1) constructor currentVersionOverride
+    // 2) environment variable VERSION_OVERRIDE (useful for CLI/tests)
+    // 3) package info from the running app
+    final envOverride = Platform.environment['VERSION_OVERRIDE'];
+    final current = _currentVersionOverride ??
+        envOverride ??
+        (await PackageInfo.fromPlatform()).version;
 
     try {
-      final resp = await http.get(Uri.parse(checkUrl)).timeout(timeout);
+      final resp = await _httpClient.get(Uri.parse(checkUrl)).timeout(timeout);
       if (resp.statusCode != 200) {
         return UpdateInfo(
             updateAvailable: false,
@@ -38,8 +52,17 @@ class VersionChecker {
       }
       final Map<String, dynamic> jsonBody =
           json.decode(resp.body) as Map<String, dynamic>;
-      final latest = (jsonBody['latest'] ?? current).toString();
-      final url = jsonBody['url']?.toString();
+      // support both "latest" and "latest_version" keys, and "url" or "update_urls" map
+      final latest =
+          (jsonBody['latest'] ?? jsonBody['latest_version'] ?? current)
+              .toString();
+      String? url;
+      if (jsonBody['url'] != null) {
+        url = jsonBody['url'].toString();
+      } else if (jsonBody['update_urls'] is Map) {
+        final m = Map<String, dynamic>.from(jsonBody['update_urls'] as Map);
+        if (m.isNotEmpty) url = m.values.first.toString();
+      }
 
       final available = _isVersionGreater(latest, current);
 

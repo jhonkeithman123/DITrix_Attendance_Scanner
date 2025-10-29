@@ -17,6 +17,7 @@ import '../theme/app_theme.dart';
 import '../models/session.dart';
 import '../services/session_store.dart';
 import '../services/camera_focus_detector.dart';
+import '../utils/app_notifier.dart';
 
 class CaptureIdScreen extends StatefulWidget {
   final String sessionId;
@@ -380,8 +381,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   Future<void> _applyParsedMasterlist(List<Map<String, String>> parsed) async {
     if (parsed.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Empty masterlist')));
+      AppNotifier.showSnack(context, 'Empty masterlist');
       return;
     }
     if (!mounted) return;
@@ -398,8 +398,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     });
     await _saveSession();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Loaded ${roster.length} students')));
+    AppNotifier.showSnack(context, 'Loaded ${roster.length} students');
   }
 
   // load CSV directly (used by popup menu)
@@ -409,8 +408,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       await _applyParsedMasterlist(parsed);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('CSV load failed: $e')));
+      AppNotifier.showSnack(context, 'CSV load failed: $e');
     }
   }
 
@@ -421,8 +419,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       await _applyParsedMasterlist(parsed);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('XLSX load failed: $e')));
+      AppNotifier.showSnack(context, 'XLSX load failed: $e');
     }
   }
 
@@ -436,16 +433,12 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
         roster[idx]['status'] = _computeStatus(now);
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(
-                  'Marked "${roster[idx]['name']}" present (simulated) - ${roster[idx]['status']}')),
-        );
+        AppNotifier.showSnack(context,
+            'Marked "${roster[idx]['name']}" present (simulated) - ${roster[idx]['status']}');
       }
     } else {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('All names already marked present')));
+        AppNotifier.showSnack(context, 'All names already marked present');
       }
     }
   }
@@ -502,8 +495,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
 
     if (!_cameraEnabled || !_isCameraInitialized || _cameraController == null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Camera not available')));
+        AppNotifier.showSnack(context, 'Camera not available');
       }
       return;
     }
@@ -536,12 +528,12 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final id = (_lastScan?['student_number'] ?? '').toString();
         final name = (_lastScan?['surname'] ?? '').toString();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(id.isEmpty && name.isEmpty
-              ? 'OCR empty'
-              : 'OCR -> id=$id name=$name'),
-          duration: const Duration(seconds: 3),
-        ));
+        AppNotifier.showSnack(
+            context,
+            id.isEmpty && name.isEmpty
+                ? 'OCR empty'
+                : 'OCR -> id=$id name=$name',
+            duration: const Duration(seconds: 3));
         // dev-only verbose log
         _log('[OCR PREVIEW] ${(_lastScan?['analyzed'] ?? '').toString()}');
       });
@@ -583,9 +575,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
               roster[idIdx]['time'] = now.toIso8601String();
               roster[idIdx]['status'] = status;
             });
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(
-                    'Auto-matched "${roster[idIdx]['name']}" by ID ($status)')));
+            AppNotifier.showSnack(context,
+                'Auto-matched "${roster[idIdx]['name']}" by ID ($status)');
             return; // matched by ID, done
           }
 
@@ -629,9 +620,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                 'status': status
               });
             });
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content:
-                    Text('Added $displayName and marked present ($status)')));
+            AppNotifier.showSnack(
+                context, 'Added $displayName and marked present ($status)');
             return;
           }
           // if user chose not to add, fall through to manual tagging UI
@@ -662,9 +652,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
               roster[bestIdx]['time'] = now.toIso8601String();
               roster[bestIdx]['status'] = status;
             });
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(
-                    'Auto-matched "${roster[bestIdx]['name']}" by name ($status)')));
+            AppNotifier.showSnack(context,
+                'Auto-matched "${roster[bestIdx]['name']}" by name ($status)');
             return; // matched by name, done
           }
         }
@@ -688,9 +677,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
               roster[index]['status'] = status;
             });
             Navigator.of(ctx).pop();
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(
-                    'Marked "${roster[index]['name']}" present ($status)')));
+            AppNotifier.showSnack(
+                context, 'Marked "${roster[index]['name']}" present ($status)');
           },
           imageFile: imageToUse,
         ),
@@ -698,8 +686,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     } catch (e) {
       _log('Capture error: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Capture failed')));
+        AppNotifier.showSnack(context, 'Capture failed');
       }
     }
   }
@@ -729,11 +716,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       // Mobile hint
       if (scanJson['error'] == 'mobile_unsupported') {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text(
-              'Python OCR isn\'t available on Android/iOS. Run on desktop or set up remote OCR.',
-            ),
-          ));
+          AppNotifier.showSnack(context,
+              'Python OCR isn\'t available on Android/iOS. Run on desktop or set up remote OCR.');
         }
         return {'file': original, 'scan': <String, dynamic>{}};
       }
@@ -742,12 +726,12 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       if (mounted) {
         final id = (scanJson['student_number'] ?? '').toString();
         final name = (scanJson['surname'] ?? '').toString();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(id.isEmpty && name.isEmpty
-              ? 'OCR: empty'
-              : 'OCR -> id=$id name=$name'),
-          duration: const Duration(seconds: 3),
-        ));
+        AppNotifier.showSnack(
+            context,
+            id.isEmpty && name.isEmpty
+                ? 'OCR: empty'
+                : 'OCR -> id=$id name=$name',
+            duration: const Duration(seconds: 3));
         _log('[OCR DEBUG] result -> id="$id" name="$name"');
       }
 
@@ -763,9 +747,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     final text = _uiLogs.join('\n');
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Copied ${_uiLogs.length} log lines')),
-    );
+    AppNotifier.showSnack(context, 'Copied ${_uiLogs.length} log lines');
   }
 
   String _normalizeId(String s) =>
@@ -785,9 +767,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     try {
       if (roster.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content:
-                  Text('Roster empty - load a masterlist or add names first')));
+          AppNotifier.showSnack(
+              context, 'Roster empty - load a masterlist or add names first');
         }
         return;
       }
@@ -795,10 +776,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
           (classStartTime.hour == 0 && classStartTime.minute == 0) ||
           (classEndTime.hour == 0 && classEndTime.minute == 0)) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content:
-                Text('Please set Subject and Subject Time before exporting'),
-          ));
+          AppNotifier.showSnack(
+              context, 'Please set Subject and Subject Time before exporting');
         }
         return;
       }
@@ -809,13 +788,11 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
         dismissTime: classEndTime.format(context),
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Exported CSV to $path')));
+      AppNotifier.showSnack(context, 'Exported CSV to $path');
     } catch (e) {
       _log('CSV export failed: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Export failed: $e')));
+        AppNotifier.showSnack(context, 'Export failed: $e');
       }
     }
   }
@@ -858,13 +835,11 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
         dismissTime: classEndTime.format(context),
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Exported XLSX to $path')));
+      AppNotifier.showSnack(context, 'Exported XLSX to $path');
     } catch (e) {
       _log('XLSX export failed: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Export failed: $e')));
+        AppNotifier.showSnack(context, 'Export failed: $e');
       }
     }
   }

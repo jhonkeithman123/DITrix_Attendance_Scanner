@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../theme/app_theme.dart';
+import '../utils/app_notifier.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -33,9 +35,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await prefs.setBool('developer_mode', _developerMode);
     await ThemeController.instance.set(_themeMode);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Settings saved')),
-    );
+    AppNotifier.showSnack(context, 'Settings saved');
   }
 
   @override
