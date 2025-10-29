@@ -846,9 +846,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
 
   @override
   Widget build(BuildContext context) {
-    // ignore: unused_local_variable
     final primary = Theme.of(context).colorScheme.primary;
-    // ignore: unused_local_variable
     final secondary = Theme.of(context).colorScheme.secondary;
 
     return Scaffold(
@@ -925,22 +923,73 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       ),
       body: Column(
         children: [
+          // Compact session info card: subject, date, start & dismiss as chips
           Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
-                    subject.isEmpty
-                        ? 'Date: ${selectedDate.toLocal().toIso8601String().split("T").first}'
-                        : 'Subject: $subject  •  Date: ${selectedDate.toLocal().toIso8601String().split("T").first}  •  Start: ${classStartTime.format(context)}',
-                    style: const TextStyle(fontSize: 16),
+                  child: Card(
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                    elevation: 0,
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  subject.isEmpty ? 'No subject' : subject,
+                                  style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    _InfoChip(
+                                        icon: Icons.calendar_today,
+                                        label: selectedDate
+                                            .toLocal()
+                                            .toIso8601String()
+                                            .split("T")
+                                            .first),
+                                    const SizedBox(width: 8),
+                                    _InfoChip(
+                                        icon: Icons.play_arrow,
+                                        label: classStartTime.format(context)),
+                                    const SizedBox(width: 8),
+                                    _InfoChip(
+                                        icon: Icons.stop,
+                                        label: classEndTime.format(context)),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Edit',
+                            icon: const Icon(Icons.edit, size: 20),
+                            onPressed: _promptSubjectAndTime,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
+                const SizedBox(width: 8),
                 ElevatedButton.icon(
                   onPressed: _pickDate,
                   icon: const Icon(Icons.calendar_today),
-                  label: const Text('Choose date'),
+                  label: const Text('Date'),
                 ),
               ],
             ),
@@ -1296,6 +1345,32 @@ class _ConfirmMatchesSheet extends StatelessWidget {
           TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('Cancel'))
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _InfoChip({required this.icon, required this.label, Key? key})
+      : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(width: 6),
+          Text(label, style: const TextStyle(fontSize: 12)),
         ],
       ),
     );

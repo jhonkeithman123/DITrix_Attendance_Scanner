@@ -140,6 +140,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool _drawerTitleExpanded = false;
 
+  Widget _buildProfileAvatar() {
+    // TODO: replace with real profile thumbnail from auth/profile store
+    // Keep visible even if offline so user sees they're still ligged in locally
+    // here we simply render a letter or default icon
+    final name = 'K';
+    return Text(name, style: const TextStyle(color: Colors.black));
+  }
+
   @override
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
@@ -206,8 +214,8 @@ class _HomeScreenState extends State<HomeScreen> {
       // moved bottom action bar out of AppBar and into Scaffold
       bottomNavigationBar: BottomAppBar(
         child: Container(
-          height: 56,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
+          height: 64,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(gradient: AppGradients.of(context)),
           child: Row(
             children: [
@@ -222,18 +230,42 @@ class _HomeScreenState extends State<HomeScreen> {
                   );
                 },
               ),
-              const SizedBox(width: 8),
-              if (_updateAvailable)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Text('Update v$_latestVersion',
-                      style: TextStyle(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onPrimary
-                              .withValues(alpha: 0.95))),
+              const SizedBox(width: 4),
+
+              // left area: update hint
+              Expanded(
+                child: _updateAvailable
+                    ? GestureDetector(
+                        onTap: _openUpdateUrl,
+                        child: Text('Update v$_latestVersion',
+                            style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onPrimary
+                                    .withValues(alpha: 0.95))),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+
+              // center: profile avatar always visible (offline-friendly)
+              GestureDetector(
+                onTap: () {
+                  // open profile / login screen
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  );
+                },
+                child: CircleAvatar(
+                  radius: 18,
+                  backgroundColor: Theme.of(context).colorScheme.onPrimary,
+                  child: _buildProfileAvatar(),
                 ),
-              const Spacer(),
+              ),
+
+              const SizedBox(width: 12),
+
+              // right: overflow menu
               PopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert),
                 color: Theme.of(context).colorScheme.onPrimary,
