@@ -10,6 +10,18 @@
         "OCR_SCRIPT": "${workspaceFolder}/student-id-scanner/flutter_app/lib/scanner_service/scan.py",
         "CONDA_PREFIX": "/home/keith123/miniconda3/envs/DITrix"
       }
+    },
+    {
+      "name": "Flutter Attach (wireless)",
+      "request": "attach",
+      "type": "dart",
+      "deviceId": "192.168.1.4:38725"
+    },
+    {
+      "name": "Flutter Start Paused",
+      "request": "launch",
+      "type": "dart",
+      "args": ["--start-paused"]
     }
   ]
 }

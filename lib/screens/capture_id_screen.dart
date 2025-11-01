@@ -846,9 +846,6 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
 
   @override
   Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
-    final secondary = Theme.of(context).colorScheme.secondary;
-
     return Scaffold(
       appBar: AppBar(
         flexibleSpace: Container(
