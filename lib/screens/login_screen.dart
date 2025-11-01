@@ -1,10 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-
+import 'package:student_id_scanner/screens/signup_screen.dart';
 import '../utils/app_notifier.dart';
 import 'home_screen.dart';
+import '../services/auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -18,8 +16,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   bool _loading = false;
-
-  static const String serverBase = 'http://localhost:5600';
+  final _auth = AuthService();
 
   @override
   void dispose() {
@@ -33,41 +30,14 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _loading = true);
 
     try {
-      final resp = await http
-          .post(
-            Uri.parse('$serverBase/auth/login'),
-            headers: {'Content-Type': 'application-json'},
-            body: jsonEncode(
-                {'email': _emailCtrl.text.trim(), 'password': _passCtrl.text}),
-          )
-          .timeout(const Duration(seconds: 8));
-
-      if (resp.statusCode != 200) {
-        AppNotifier.showSnack(context, 'Login failed (${resp.statusCode})');
+      final ok = await _auth.signIn(
+          email: _emailCtrl.text.trim(), password: _passCtrl.text);
+      if (!ok) {
+        if (!mounted) return;
+        AppNotifier.showSnack(context, 'Login failed');
         return;
       }
-
-      final Map<String, dynamic> body =
-          jsonEncode(resp.body) as Map<String, dynamic>;
-      final token = body['token']?.toString();
-      final profile = body['profile'] as Map<String, dynamic>?;
-
-      if (token == null) {
-        AppNotifier.showSnack(context, 'Login response missing token');
-        return;
-      }
-
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('auth_token', token);
-      if (profile != null) {
-        await prefs.setString(
-            'profile_name', profile['name']?.toString() ?? '');
-        await prefs.setString(
-            'profile_email', profile['email']?.toString() ?? '');
-        await prefs.setString(
-            'profile_avatar', profile['avatar_url']?.toString() ?? '');
-      }
-
+      if (!mounted) return;
       AppNotifier.showSnack(context, 'Login successful');
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
@@ -136,12 +106,12 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 8),
                     TextButton(
-                      onPressed: _loading
-                          ? null
-                          : () {
-                              AppNotifier.showSnack(
-                                  context, 'Signup not implemented yet');
-                            },
+                      onPressed: () {
+                        Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const SignupScreen()));
+                      },
                       child: const Text('Sign up'),
                     ),
                   ]),

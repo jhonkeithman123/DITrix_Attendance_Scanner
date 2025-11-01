@@ -235,18 +235,6 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     }
   }
 
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: selectedDate,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100),
-      helpText: 'Select attendance date',
-    );
-    if (!mounted) return;
-    if (picked != null) setState(() => selectedDate = picked);
-  }
-
   Future<void> _loadSession() async {
     final s = await _sessionStore.load(widget.sessionId);
     if (!mounted) return;
@@ -420,26 +408,6 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     } catch (e) {
       if (!mounted) return;
       AppNotifier.showSnack(context, 'XLSX load failed: $e');
-    }
-  }
-
-  void _simulateCaptureOne() {
-    final idx = roster.indexWhere((r) => r['present'] == false);
-    if (idx != -1) {
-      final now = DateTime.now();
-      setState(() {
-        roster[idx]['present'] = true;
-        roster[idx]['time'] = now.toIso8601String();
-        roster[idx]['status'] = _computeStatus(now);
-      });
-      if (mounted) {
-        AppNotifier.showSnack(context,
-            'Marked "${roster[idx]['name']}" present (simulated) - ${roster[idx]['status']}');
-      }
-    } else {
-      if (mounted) {
-        AppNotifier.showSnack(context, 'All names already marked present');
-      }
     }
   }
 
@@ -853,6 +821,12 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
         ),
         title: const Text('Capture ID'),
         actions: [
+          // quick access button placed before the overflow menu
+          IconButton(
+            tooltip: 'Set subject & class time',
+            icon: const Icon(Icons.event),
+            onPressed: _promptSubjectAndTime,
+          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             onSelected: (value) async {
@@ -862,9 +836,6 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                   break;
                 case 'copyLogs':
                   await _copyLogs();
-                  break;
-                case 'settings':
-                  await _promptSubjectAndTime();
                   break;
                 case 'toggleCam':
                   await _toggleCamera();
@@ -881,10 +852,6 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
               }
             },
             itemBuilder: (ctx) => [
-              const PopupMenuItem(
-                value: 'settings',
-                child: Text('Set subject & class time'),
-              ),
               PopupMenuItem(
                 value: 'toggleCam',
                 child:
@@ -981,12 +948,6 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: _pickDate,
-                  icon: const Icon(Icons.calendar_today),
-                  label: const Text('Date'),
                 ),
               ],
             ),
@@ -1211,12 +1172,6 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                 ),
                 const SizedBox(width: 12),
                 ElevatedButton.icon(
-                  icon: const Icon(Icons.camera), // simulate
-                  label: const Text('Simulate'),
-                  onPressed: _simulateCaptureOne,
-                ),
-                const SizedBox(width: 12),
-                ElevatedButton.icon(
                   icon: const Icon(Icons.save_alt),
                   label: const Text('Export'),
                   onPressed: _exportPrompt,
@@ -1351,8 +1306,7 @@ class _ConfirmMatchesSheet extends StatelessWidget {
 class _InfoChip extends StatelessWidget {
   final IconData icon;
   final String label;
-  const _InfoChip({required this.icon, required this.label, Key? key})
-      : super(key: key);
+  const _InfoChip({required this.icon, required this.label});
 
   @override
   Widget build(BuildContext context) {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:student_id_scanner/screens/login_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'about_screen.dart';
@@ -210,6 +211,37 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            tooltip: _updateAvailable ? 'Open update' : 'Check for updates',
+            onPressed: () async {
+              if (_updateAvailable && _updateUrl != null) {
+                await _openUpdateUrl();
+              } else {
+                await _checkForUpdate();
+              }
+            },
+            icon: Stack(
+              alignment: Alignment.center,
+              children: [
+                const Icon(Icons.system_update),
+                if (_updateAvailable)
+                  Positioned(
+                    right: 0,
+                    top: 8,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
       // moved bottom action bar out of AppBar and into Scaffold
       bottomNavigationBar: BottomAppBar(
@@ -218,7 +250,9 @@ class _HomeScreenState extends State<HomeScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(gradient: AppGradients.of(context)),
           child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
+              // left: tutorial button
               IconButton(
                 tooltip: 'Tutorial',
                 icon: const Icon(Icons.school_outlined),
@@ -230,30 +264,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   );
                 },
               ),
-              const SizedBox(width: 4),
 
-              // left area: update hint
-              Expanded(
-                child: _updateAvailable
-                    ? GestureDetector(
-                        onTap: _openUpdateUrl,
-                        child: Text('Update v$_latestVersion',
-                            style: TextStyle(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onPrimary
-                                    .withValues(alpha: 0.95))),
-                      )
-                    : const SizedBox.shrink(),
-              ),
-
-              // center: profile avatar always visible (offline-friendly)
+              // center: profile avatar (tappable)
               GestureDetector(
                 onTap: () {
-                  // open profile / login screen
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                    MaterialPageRoute(builder: (_) => const LoginScreen()),
                   );
                 },
                 child: CircleAvatar(
@@ -262,8 +279,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: _buildProfileAvatar(),
                 ),
               ),
-
-              const SizedBox(width: 12),
 
               // right: overflow menu
               PopupMenuButton<String>(

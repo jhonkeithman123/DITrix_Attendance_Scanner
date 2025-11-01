@@ -15,7 +15,8 @@
       "name": "Flutter Attach (wireless)",
       "request": "attach",
       "type": "dart",
-      "deviceId": "192.168.1.4:38725"
+      // Removed hard-coded deviceId to avoid always attaching to the wireless device.
+      // Leave device selection to the VS Code UI or specify a USB device id when needed.
     },
     {
       "name": "Flutter Start Paused",
