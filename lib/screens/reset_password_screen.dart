@@ -23,6 +23,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   final GlobalKey _cardKey = GlobalKey();
   bool _needsScroll = false;
 
+  // single eye toggle to reveal/hide all password fields
+  bool _showPasswords = false;
+
   @override
   void dispose() {
     _codeCtl.dispose();
@@ -101,15 +104,25 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: _passCtl,
-                    obscureText: true,
-                    decoration:
-                        const InputDecoration(labelText: 'New password'),
+                    obscureText: !_showPasswords,
+                    decoration: InputDecoration(
+                      labelText: 'New password',
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _showPasswords
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                        ),
+                        onPressed: () =>
+                            setState(() => _showPasswords = !_showPasswords),
+                      ),
+                    ),
                     validator: _validatePass,
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: _confirmCtl,
-                    obscureText: true,
+                    obscureText: !_showPasswords,
                     decoration:
                         const InputDecoration(labelText: 'Confirm password'),
                     validator: _validateConfirm,

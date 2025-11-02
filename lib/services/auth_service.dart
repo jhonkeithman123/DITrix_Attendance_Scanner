@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthService {
   // Replace localhost with your API host if needed
-  static const String _baseUrl = 'http://192.168.1.7:5600';
+  static const String _baseUrl = 'http://192.168.1.3:5600';
 
   // helper to POST JSON with timeout and clearer errors
   Future<http.Response> _postJson(String path, Map<String, dynamic> body,
