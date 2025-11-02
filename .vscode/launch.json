@@ -14,15 +14,21 @@
     {
       "name": "Flutter Attach (wireless)",
       "request": "attach",
-      "type": "dart",
-      // Removed hard-coded deviceId to avoid always attaching to the wireless device.
-      // Leave device selection to the VS Code UI or specify a USB device id when needed.
+      "type": "dart"
     },
     {
       "name": "Flutter Start Paused",
       "request": "launch",
       "type": "dart",
-      "args": ["--start-paused"]
+      "args": [
+        "--start-paused"
+      ]
+    },
+    {
+      "name": "DITrix_Attendance_Scanner (Flutter)",
+      "program": "lib/main.dart",
+      "request": "launch",
+      "type": "dart"
     }
   ]
 }

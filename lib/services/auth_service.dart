@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthService {
   // Replace localhost with your API host if needed
-  static const String _baseUrl = 'http://localhost:5600';
+  static const String _baseUrl = 'http://192.168.1.7:5600';
 
   Future<bool> signIn({
     required String email,
@@ -45,19 +45,100 @@ class AuthService {
     return true;
   }
 
-  Future<bool> signUp({
+  Future<Map<String, dynamic>> signUp({
     required String email,
     required String password,
+    required String name,
   }) async {
     final uri = Uri.parse('$_baseUrl/auth/signup');
     final resp = await http
         .post(
           uri,
           headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'email': email, 'password': password}),
+          body:
+              jsonEncode({'email': email, 'password': password, 'name': name}),
         )
         .timeout(const Duration(seconds: 8));
-    return resp.statusCode == 200 || resp.statusCode == 201;
+
+    if (resp.statusCode == 200 || resp.statusCode == 201) {
+      try {
+        final Map<String, dynamic> body = jsonDecode(resp.body);
+        // normalize notice to a simple string under 'noticeText' for UI use
+        if (body.containsKey('notice')) {
+          body['noticeText'] = body['notice']?.toString();
+        }
+        if (body.containsKey('message')) {
+          body['messageText'] = body['message']?.toString();
+        }
+        return body;
+      } catch (_) {
+        return {'status': 'ok'};
+      }
+    }
+
+    String msg;
+    try {
+      final Map<String, dynamic> body = jsonDecode(resp.body);
+      msg = (body['error'] ?? body['message'] ?? resp.reasonPhrase ?? resp.body)
+          .toString();
+    } catch (_) {
+      msg = resp.body.isNotEmpty
+          ? resp.body
+          : 'Signup failed (status ${resp.statusCode})';
+    }
+    throw Exception(msg);
+  }
+
+  // Also update verifyEmail/resend to extract error messages safely:
+  Future<bool> verifyEmail({
+    required String email,
+    required String code,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/auth/verify');
+    final resp = await http
+        .post(uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email, 'code': code}))
+        .timeout(const Duration(seconds: 8));
+
+    if (resp.statusCode == 200) return true;
+
+    String msg;
+    try {
+      final Map<String, dynamic> body = jsonDecode(resp.body);
+      msg = (body['error'] ?? body['message'] ?? resp.reasonPhrase ?? resp.body)
+          .toString();
+    } catch (_) {
+      msg = resp.body.isNotEmpty
+          ? resp.body
+          : 'Verification failed (status ${resp.statusCode})';
+    }
+    throw Exception(msg);
+  }
+
+  Future<void> resendVerification({
+    required String email,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/auth/resend');
+    final resp = await http
+        .post(uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email}))
+        .timeout(const Duration(seconds: 8));
+
+    if (resp.statusCode == 200) return;
+
+    String msg;
+    try {
+      final Map<String, dynamic> body = jsonDecode(resp.body);
+      msg = (body['error'] ?? body['message'] ?? resp.reasonPhrase ?? resp.body)
+          .toString();
+    } catch (_) {
+      msg = resp.body.isNotEmpty
+          ? resp.body
+          : 'Resend failed (status ${resp.statusCode})';
+    }
+    throw Exception(msg);
   }
 
   Future<void> signOut() async {

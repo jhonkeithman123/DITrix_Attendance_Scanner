@@ -3,6 +3,8 @@ import '../theme/app_theme.dart';
 import '../utils/app_notifier.dart';
 import '../services/auth_service.dart';
 import 'login_screen.dart';
+import 'dart:math' as math;
+import 'verify_email_screen.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -14,6 +16,7 @@ class SignupScreen extends StatefulWidget {
 class _SignupScreenState extends State<SignupScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailCtl = TextEditingController();
+  final _nameCtl = TextEditingController();
   final _passCtl = TextEditingController();
   final _confirmCtl = TextEditingController();
   final _auth = AuthService();
@@ -24,6 +27,9 @@ class _SignupScreenState extends State<SignupScreen> {
   bool _showConfirm = false;
   bool _agree = false;
   int _pwScore = 0;
+
+  final GlobalKey _cardKey = GlobalKey();
+  bool _needScroll = false;
 
   @override
   void initState() {
@@ -49,21 +55,41 @@ class _SignupScreenState extends State<SignupScreen> {
     }
     setState(() => _loading = true);
     try {
-      final ok = await _auth.signUp(
-          email: _emailCtl.text.trim(), password: _passCtl.text);
-      setState(() => _loading = false);
-      if (ok) {
+      final resp = await _auth.signUp(
+          email: _emailCtl.text.trim(),
+          password: _passCtl.text,
+          name: _nameCtl.text.trim());
+
+      final status = resp['status']?.toString() ?? 'ok';
+      final notice = resp['notice']?.toString();
+
+      if (status == 'ok') {
         if (!mounted) return;
-        AppNotifier.showSnack(context, 'Account created. Please sign in.');
-        Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const LoginScreen()));
+
+        if (notice != null) {
+          final friendly = notice == 'account_created_email_failed'
+              ? 'Account created but failed to send verification email.'
+              : 'Verification code sent to your email';
+          AppNotifier.showSnack(context, friendly);
+          Navigator.of(context).pushReplacement(MaterialPageRoute(
+              builder: (_) => VerifyEmailScreen(
+                    email: _emailCtl.text.trim(),
+                    notice: friendly,
+                  )));
+        } else {
+          AppNotifier.showSnack(context, 'Account created. Please sign in.');
+          Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (_) => const LoginScreen()));
+        }
       } else {
         if (!mounted) return;
         AppNotifier.showSnack(context, 'Signup failed');
       }
     } catch (e) {
-      setState(() => _loading = false);
-      AppNotifier.showSnack(context, 'Signup error: $e');
+      final msg = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+      AppNotifier.showSnack(context, msg);
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -128,27 +154,40 @@ class _SignupScreenState extends State<SignupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         title: const Text('Create account'),
         flexibleSpace: Container(
             decoration: BoxDecoration(gradient: AppGradients.of(context))),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520),
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Form(
-                  key: _formKey,
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+      body: LayoutBuilder(builder: (ctx, constraints) {
+        final maxWidth = math.min(520.0, constraints.maxWidth * 0.95);
+        final horizontalPadding = math.min(24.0, constraints.maxWidth * 0.04);
+        final verticalPadding = 16.0 * 2;
+
+        // form card (extracted for clarity)
+        final formCard = ConstrainedBox(
+          key: _cardKey,
+          constraints: BoxConstraints(maxWidth: maxWidth),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                     TextFormField(
                       controller: _emailCtl,
                       keyboardType: TextInputType.emailAddress,
                       decoration: const InputDecoration(labelText: 'Email'),
                       validator: _validateEmail,
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _nameCtl,
+                      keyboardType: TextInputType.name,
+                      decoration: const InputDecoration(labelText: 'Name'),
                     ),
                     const SizedBox(height: 12),
                     TextFormField(
@@ -166,10 +205,8 @@ class _SignupScreenState extends State<SignupScreen> {
                       ),
                       validator: _validatePass,
                     ),
-                    // show password strength only when user has typed something
                     if (_passCtl.text.isNotEmpty) ...[
                       const SizedBox(height: 8),
-                      // password strength bar
                       Row(
                         children: [
                           Expanded(
@@ -206,13 +243,12 @@ class _SignupScreenState extends State<SignupScreen> {
                     Row(
                       children: [
                         Checkbox(
-                          value: _agree,
-                          onChanged: (v) => setState(() => _agree = v ?? false),
-                        ),
+                            value: _agree,
+                            onChanged: (v) =>
+                                setState(() => _agree = v ?? false)),
                         const Expanded(
-                          child:
-                              Text('I agree to the Terms and Privacy Policy'),
-                        ),
+                            child: Text(
+                                'I agree to the Terms and Privacy Policy')),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -220,13 +256,21 @@ class _SignupScreenState extends State<SignupScreen> {
                       width: double.infinity,
                       child: ElevatedButton(
                         onPressed: (_loading || !_agree) ? null : _submit,
-                        child: _loading
-                            ? const SizedBox(
-                                height: 16,
-                                width: 16,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2))
-                            : const Text('Create account'),
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 250),
+                          transitionBuilder: (child, anim) =>
+                              FadeTransition(opacity: anim, child: child),
+                          child: _loading
+                              ? const SizedBox(
+                                  key: ValueKey('spinner'),
+                                  height: 18,
+                                  width: 18,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Text('Create account',
+                                  key: ValueKey('label')),
+                        ),
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -246,13 +290,67 @@ class _SignupScreenState extends State<SignupScreen> {
                         ),
                       ],
                     ),
-                  ]),
+                  ],
                 ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+
+        // measeure after layout to decide if scrollion is required
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final rb = _cardKey.currentContext?.findRenderObject() as RenderBox?;
+          final cardHeight = rb?.size.height ?? 0;
+          final fits = cardHeight + verticalPadding <= constraints.maxHeight;
+          final shouldScroll = !fits;
+          if (_needScroll != shouldScroll) {
+            setState(() => _needScroll = shouldScroll);
+          }
+        });
+
+        final scrollPhysics = _needScroll
+            ? const AlwaysScrollableScrollPhysics()
+            : const NeverScrollableScrollPhysics();
+
+        // The SingleChildScrollView + ConstrainedBox(minHeight) pattern centers the form
+        // when it fits, and allows scrolling only when overflow occurs.
+        return Stack(
+          children: [
+            SingleChildScrollView(
+              physics: scrollPhysics,
+              padding: EdgeInsets.symmetric(
+                  horizontal: horizontalPadding, vertical: 16),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Column(
+                  // center vertically when there's extra space
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    formCard,
+                  ],
+                ),
+              ),
+            ),
+
+            // loading overlay: fades in and blocks input while submitting
+            IgnorePointer(
+              ignoring: !_loading,
+              child: AnimatedOpacity(
+                opacity: _loading ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 200),
+                child: _loading
+                    ? Container(
+                        color: Colors.black45,
+                        child: const Center(
+                          child: CircularProgressIndicator(),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ),
+          ],
+        );
+      }),
     );
   }
 }
