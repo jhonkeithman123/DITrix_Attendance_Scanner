@@ -7,6 +7,8 @@ import 'signup_screen.dart';
 import 'forgot_password_screen.dart';
 import 'home_screen.dart';
 import 'dart:math' as math;
+import 'dart:io';
+import 'dart:async';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -72,19 +74,18 @@ class _LoginScreenState extends State<LoginScreen> {
         Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (_) => const HomeScreen()));
       }
+    } on TimeoutException {
+      if (!mounted) return;
+      AppNotifier.showSnack(context, 'Server not running (request timed out)');
+    } on SocketException {
+      if (!mounted) return;
+      AppNotifier.showSnack(context, 'Server not running (network error)');
     } catch (e) {
-      // ignore: don't block UI for session check errors
+      // ignore: don't block UI for other session check errors
     }
   }
 
   Future<void> _submit() async {
-    // for development
-    // if (!mounted) return;
-    // AppNotifier.showSnack(
-    //   context,
-    //   'Not availabled yet, stay tuned for more updates.',
-    // );
-
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
     try {
@@ -101,6 +102,10 @@ class _LoginScreenState extends State<LoginScreen> {
         if (!mounted) return;
         AppNotifier.showSnack(context, 'Sign in failed');
       }
+    } on TimeoutException {
+      AppNotifier.showSnack(context, 'Server not running (request timed out)');
+    } on SocketException {
+      AppNotifier.showSnack(context, 'Server not running (network error)');
     } catch (e) {
       final msg = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
       AppNotifier.showSnack(context, msg);

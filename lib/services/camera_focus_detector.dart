@@ -47,13 +47,13 @@ class CameraFocusDetector {
     final mean = sum / count;
     final variance = (sum2 / count) - (mean * mean);
 
-    debugPrint(
-        '[FocusDetector] variance=${variance.toStringAsFixed(1)} threshold=$varianceThreshold');
+    // debugPrint(
+    // '[FocusDetector] variance=${variance.toStringAsFixed(1)} threshold=$varianceThreshold');
 
     if (variance > varianceThreshold) {
       _lastTriggered = now;
 
-      debugPrint('[FocusDetector] triggered focus callback');
+      // debugPrint('[FocusDetector] triggered focus callback');
       try {
         onFocus();
       } catch (_) {}

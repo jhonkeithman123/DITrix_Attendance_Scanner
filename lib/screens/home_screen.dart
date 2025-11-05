@@ -110,7 +110,7 @@ class _HomeScreenState extends State<HomeScreen> {
           context, MaterialPageRoute(builder: (_) => const LoginScreen()));
     } catch (e) {
       // network/server error: if we had a local profile, still go to ProfileScreen; otherwise show error and stay
-      debugPrint('profile tap check error: $e');
+      // debugPrint('profile tap check error: $e');
       if (prefs != null && (prefs.getString('profile_name') ?? '').isNotEmpty) {
         if (!mounted) return;
         Navigator.push(
@@ -155,7 +155,7 @@ class _HomeScreenState extends State<HomeScreen> {
             await TokenStorage.saveToken(token, expiresAtEpochMs: epochMs);
           }
         } catch (e) {
-          debugPrint('failed to persist refreshed expiry: $e');
+          // debugPrint('failed to persist refreshed expiry: $e');
         }
 
         // attempt to fetch profile again
@@ -201,14 +201,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 expiresAtEpochMs: epochMs);
           }
         } catch (e) {
-          debugPrint('failed to persist refreshed expiry: $e');
+          // debugPrint('failed to persist refreshed expiry: $e');
         }
       }
 
       if (mounted) _loadProfileInfo();
+      // ignore: unused_catch_clause
     } on Exception catch (e) {
       // network/server error — do not log the user out for transient errors.
-      debugPrint('background session validation failed (non-fatal): $e');
+      // debugPrint('background session validation failed (non-fatal): $e');
     }
   }
 

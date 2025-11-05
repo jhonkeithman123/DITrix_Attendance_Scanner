@@ -49,7 +49,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (bytes.isEmpty) return null;
       return bytes;
     } catch (e) {
-      debugPrint('avatar base64 decode failed: $e');
+      // debugPrint('avatar base64 decode failed: $e');
       return null;
     }
   }
@@ -77,7 +77,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return;
       }
       // invalid -> remove and regenerate
-      debugPrint('Invalid stored avatar, regenerating');
+      // debugPrint('Invalid stored avatar, regenerating');
       _avatarBase64 = null;
       await prefs.remove('profile_avatar');
     }
@@ -90,7 +90,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         setState(() => _avatarBase64 = pngBase64);
         await prefs.setString('profile_avatar', pngBase64);
       } catch (e) {
-        debugPrint('avatar generation failed: $e');
+        // debugPrint('avatar generation failed: $e');
       }
     }
   }
@@ -198,8 +198,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           }
         }
       } catch (err) {
-        debugPrint(
-            'MemoryImage/NetworkImage failed, falling back to initials: $err');
+        // debugPrint('MemoryImage/NetworkImage failed, falling back to initials: $err');
         child = _initialsAvatar();
       }
     } else {
@@ -280,7 +279,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         await _auth.updateProfile(
             name: _nameCtl.text.trim(), avatarBase64: _avatarBase64);
       } catch (e) {
-        debugPrint('profile server update failed: $e');
+        // debugPrint('profile server update failed: $e');
         // fail early if you want strict behavior; here we continue and still save locally
         throw Exception('Server update failed');
       }
