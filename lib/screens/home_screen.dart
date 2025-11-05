@@ -34,7 +34,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Uint8List? _profileAvatarBytes;
   String _profileInitial = 'K';
   Color _profileColor = Colors.grey;
+  // ignore: unused_field
   String? _profileName;
+  // ignore: unused_field
   String? _profileAvatarRaw;
 
   // new: control appbar title expansion when tapping the logo
