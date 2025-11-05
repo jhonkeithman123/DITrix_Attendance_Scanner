@@ -15,9 +15,13 @@ class Session {
     List<Map<String, dynamic>>? roster,
   }) : roster = roster ?? <Map<String, dynamic>>[];
 
+  // date string (YYYY-MM-DD) derived from createdAt — used by UI and server payloads
+  String get date => createdAt.toIso8601String().split('T').first;
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'createdAt': createdAt.toIso8601String(),
+        'date': date,
         'subject': subject,
         'startTime': startTime,
         'endTime': endTime,

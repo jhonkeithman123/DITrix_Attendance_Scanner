@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/token_storage.dart';
+
 class AuthService {
   // Replace localhost with your API host if needed
   static const String _baseUrl = 'http://192.168.1.3:5600';
@@ -18,6 +20,73 @@ class AuthService {
           .post(uri,
               headers: {'Content-Type': 'application/json'},
               body: jsonEncode(body))
+          .timeout(timeout);
+      return resp;
+    } on TimeoutException {
+      throw Exception('Request timed out. Is the server running at $_baseUrl?');
+    } on SocketException {
+      throw Exception('Network error. Unable to reach server at $_baseUrl');
+    }
+  }
+
+  // ignore: unused_element
+  Future<http.Response> _authedPost(String path, Map<String, dynamic> body,
+      {Duration timeout = const Duration(seconds: 10)}) async {
+    final token = await TokenStorage.getToken();
+    if (token == null) throw Exception("Not authenticated");
+
+    final uri = Uri.parse('$_baseUrl$path');
+    final headers = {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+    try {
+      final resp = await http
+          .post(uri, headers: headers, body: jsonEncode(body))
+          .timeout(timeout);
+      return resp;
+    } on TimeoutException {
+      throw Exception('Request timed out. Is the server running at $_baseUrl?');
+    } on SocketException {
+      throw Exception('Network error. Unable to reach server at $_baseUrl');
+    }
+  }
+
+  // ignore: unused_element
+  Future<http.Response> _authedPut(String path, Map<String, dynamic> body,
+      {Duration timeout = const Duration(seconds: 10)}) async {
+    final token = await TokenStorage.getToken();
+    if (token == null) throw Exception("Not authenticated");
+
+    final uri = Uri.parse('$_baseUrl$path');
+    final headers = {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+    try {
+      final resp = await http
+          .put(uri, headers: headers, body: jsonEncode(body))
+          .timeout(timeout);
+      return resp;
+    } on TimeoutException {
+      throw Exception('Request timed out. Is the server running at $_baseUrl?');
+    } on SocketException {
+      throw Exception('Network error. Unable to reach server at $_baseUrl');
+    }
+  }
+
+  // ignore: unused_element
+  Future<http.Response> _authedPatch(String path, Map<String, dynamic> body,
+      {Duration timeout = const Duration(seconds: 10)}) async {
+    final token = await TokenStorage.getToken();
+    final uri = Uri.parse('$_baseUrl$path');
+    final headers = {
+      'Content-Type': 'application/json',
+      if (token != null) 'Authorization': 'Bearer $token',
+    };
+    try {
+      final resp = await http
+          .patch(uri, headers: headers, body: jsonEncode(body))
           .timeout(timeout);
       return resp;
     } on TimeoutException {
@@ -41,6 +110,36 @@ class AuthService {
       throw Exception('Request timed out. Is the server running at $_baseUrl?');
     } on SocketException {
       throw Exception('Network error. Unable to reach server at $_baseUrl');
+    }
+  }
+
+  /// Validate existing client token against server session store.
+  /// Returns profile map on success, null otherwise.
+  Future<Map<String, dynamic>?> validateSession() async {
+    final token = await TokenStorage.getToken();
+    if (token == null) return null;
+
+    final uri = Uri.parse('/auth/session');
+    try {
+      final resp = await http.get(uri, headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      }).timeout(const Duration(seconds: 8));
+
+      if (resp.statusCode == 200) {
+        final Map<String, dynamic> body = jsonDecode(resp.body);
+        return body['profile'] is Map
+            ? Map<String, dynamic>.from(body['profile'])
+            : null;
+      }
+
+      return null;
+    } on TimeoutException {
+      throw Exception('Request timed out. Is the server running at $_baseUrl?');
+    } on SocketException {
+      throw Exception('Network error. Unable to reach server at $_baseUrl');
+    } catch (_) {
+      return null;
     }
   }
 
@@ -68,14 +167,16 @@ class AuthService {
 
     final Map<String, dynamic> body = jsonDecode(resp.body);
     final token = body['token']?.toString();
+    if (token == null) throw Exception('Login response missing token');
+
     final profile = (body['profile'] is Map)
         ? Map<String, dynamic>.from(body['profile'])
         : null;
 
-    if (token == null) throw Exception('Login response missing token');
-
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('auth_token', token);
+    // also save token to file cache used by TokenStorage.getToken()
+    await TokenStorage.saveToken(token);
     if (profile != null) {
       await prefs.setString('profile_name', profile['name']?.toString() ?? '');
       await prefs.setString(
@@ -220,11 +321,57 @@ class AuthService {
     throw Exception(msg);
   }
 
+  Future<void> updateProfile(
+      {required String name, String? avatarBase64}) async {
+    final body = <String, dynamic>{'name': name};
+    if (avatarBase64 != null) body['avatarBase64'] = avatarBase64;
+
+    final resp = await _authedPut('/profile', body);
+
+    if (resp.statusCode != 200) {
+      final msg = resp.body.isNotEmpty ? resp.body : 'Server error';
+      throw Exception('Failed to update profile: $msg');
+    }
+    return;
+  }
+
+  /// upload local capture sessions to server
+  Future<int> uploadCaptures(List<Map<String, dynamic>> captures) async {
+    final resp = await _authedPost('/sync/captures', {'captures': captures});
+
+    if (resp.statusCode != 200) {
+      throw Exception('Upload failed: ${resp.statusCode}');
+    }
+    final body = jsonDecode(resp.body);
+    return (body['uploaded'] is int) ? body['uploaded'] as int : 0;
+  }
+
   Future<void> signOut() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');
     await prefs.remove('profile_name');
     await prefs.remove('profile_email');
     await prefs.remove('profile_avatar');
+  }
+
+  /// Ask server to extend the current session expiry.
+  /// Returns ISO expiry string on success, null on failure.
+  Future<String?> refreshSession() async {
+    final token = await TokenStorage.getToken();
+    if (token == null) return null;
+    final uri = Uri.parse('$_baseUrl/auth/refresh');
+    try {
+      final resp = await http.post(uri, headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      }).timeout(const Duration(seconds: 8));
+
+      if (resp.statusCode != 200) return null;
+      final body = jsonDecode(resp.body);
+      return body['expiresAt'] as String?;
+    } on Exception catch (e) {
+      print('refreshSession failed: $e');
+      return null;
+    }
   }
 }

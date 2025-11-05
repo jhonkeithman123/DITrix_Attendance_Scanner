@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../utils/app_notifier.dart';
 import '../services/auth_service.dart';
 import 'signup_screen.dart';
 import 'forgot_password_screen.dart';
+import 'home_screen.dart';
 import 'dart:math' as math;
 
 class LoginScreen extends StatefulWidget {
@@ -28,6 +31,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
+    _checkExistingSession();
   }
 
   @override
@@ -49,34 +53,60 @@ class _LoginScreenState extends State<LoginScreen> {
     return null;
   }
 
-  Future<void> _submit() async {
-    if (!mounted) return;
-    AppNotifier.showSnack(
-      context,
-      'Not availabled yet, stay tuned for more updates.',
-    );
+  Future<void> _checkExistingSession() async {
+    try {
+      final profile = await _auth.validateSession();
+      if (profile != null && mounted) {
+        // optional: persist profile locally to SharedPreferences for profile screen
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(
+            'profile_name', profile['name']?.toString() ?? '');
+        await prefs.setString(
+            'profile_email', profile['email']?.toString() ?? '');
+        if (profile['avatar_url'] != null) {
+          await prefs.setString(
+              'profile_avatar', profile['avatar_url'].toString());
+        }
 
-    // if (!_formKey.currentState!.validate()) return;
-    // setState(() => _loading = true);
-    // try {
-    //   final ok = await _auth.signIn(
-    //     email: _emailCtl.text.trim(),
-    //     password: _passCtl.text,
-    //   );
-    //   if (ok) {
-    //     if (!mounted) return;
-    //     AppNotifier.showSnack(context, 'Signed in');
-    //     // TODO: navigate to home/dashboard
-    //   } else {
-    //     if (!mounted) return;
-    //     AppNotifier.showSnack(context, 'Sign in failed');
-    //   }
-    // } catch (e) {
-    //   final msg = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
-    //   AppNotifier.showSnack(context, msg);
-    // } finally {
-    //   if (mounted) setState(() => _loading = false);
-    // }
+        if (!mounted) return;
+        Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const HomeScreen()));
+      }
+    } catch (e) {
+      // ignore: don't block UI for session check errors
+    }
+  }
+
+  Future<void> _submit() async {
+    // for development
+    // if (!mounted) return;
+    // AppNotifier.showSnack(
+    //   context,
+    //   'Not availabled yet, stay tuned for more updates.',
+    // );
+
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _loading = true);
+    try {
+      final ok = await _auth.signIn(
+        email: _emailCtl.text.trim(),
+        password: _passCtl.text,
+      );
+      if (ok) {
+        if (!mounted) return;
+        AppNotifier.showSnack(context, 'Signed in');
+        Navigator.of(context)
+            .push(MaterialPageRoute(builder: (_) => const HomeScreen()));
+      } else {
+        if (!mounted) return;
+        AppNotifier.showSnack(context, 'Sign in failed');
+      }
+    } catch (e) {
+      final msg = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+      AppNotifier.showSnack(context, msg);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   @override

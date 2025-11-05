@@ -1,7 +1,13 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:student_id_scanner/screens/login_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'profile_screen.dart';
+import '../services/token_storage.dart';
+import '../services/auth_service.dart';
 import 'about_screen.dart';
 import 'capture_id_screen.dart';
 import '../theme/app_theme.dart';
@@ -19,8 +25,17 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final _store = SessionStore();
+  final _auth = AuthService();
   List<Session> _sessions = [];
   bool _loading = true;
+  bool _checkingProfile = false;
+  bool _savingUploads = false;
+
+  Uint8List? _profileAvatarBytes;
+  String _profileInitial = 'K';
+  Color _profileColor = Colors.grey;
+  String? _profileName;
+  String? _profileAvatarRaw;
 
   // new: control appbar title expansion when tapping the logo
   bool _appBarTitleExpanded = false;
@@ -39,6 +54,216 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _refresh();
     _checkForUpdate();
+    _loadProfileInfo();
+  }
+
+  Future<void> _onProfileTap() async {
+    if (_checkingProfile) return;
+    setState(() => _checkingProfile = true);
+    SharedPreferences? prefs;
+    try {
+      final token = await TokenStorage.getToken();
+      if (token == null) {
+        if (!mounted) return;
+        Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+        return;
+      }
+
+      prefs = await SharedPreferences.getInstance();
+      final localName = prefs.getString('profile_name');
+      final hasLocalProfile = localName != null && localName.isNotEmpty;
+
+      if (hasLocalProfile) {
+        // optimistic navigation: show profile immediately, validate in background
+        if (!mounted) return;
+        Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
+        _validateSessionInBackground();
+        return;
+      }
+
+      // no local profile -> validate first
+      final profile = await _auth.validateSession();
+      if (profile != null) {
+        // persist profile locally for next time
+        await prefs.setString(
+            'profile_name', profile['name']?.toString() ?? '');
+        await prefs.setString(
+            'profile_email', profile['email']?.toString() ?? '');
+        if (profile['avatar_url'] != null) {
+          await prefs.setString(
+              'profile_avatar', profile['avatar_url'].toString());
+        }
+        if (!mounted) return;
+        Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
+        return;
+      }
+
+      // invalid session -> clear token and go to login
+      await TokenStorage.deleteToken();
+      if (!mounted) return;
+      Navigator.push(
+          context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+    } catch (e) {
+      // network/server error: if we had a local profile, still go to ProfileScreen; otherwise show error and stay
+      debugPrint('profile tap check error: $e');
+      if (prefs != null && (prefs.getString('profile_name') ?? '').isNotEmpty) {
+        if (!mounted) return;
+        Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
+      } else {
+        if (!mounted) return;
+        AppNotifier.showSnack(
+            context, 'Could not validate session. Check your connection.');
+      }
+    } finally {
+      if (mounted) setState(() => _checkingProfile = false);
+    }
+  }
+
+  // validate session silently in background; if invalid -> force logout
+  Future<void> _validateSessionInBackground() async {
+    try {
+      final profile = await _auth.validateSession();
+
+      if (profile == null) {
+        // token invalid/expired (server explicitly returned 401). Try refresh before forcing logout.
+        final newExpiresIso = await _auth.refreshSession();
+        if (newExpiresIso == null) {
+          // refresh failed -> logout
+          await TokenStorage.deleteToken();
+          if (!mounted) return;
+          AppNotifier.showSnack(
+              context, 'Session expired — please sign in again');
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+            (route) => false,
+          );
+          return;
+        }
+
+        // refresh succeeded: persist new expiry and update local profile by calling validateSession again
+        try {
+          final token = await TokenStorage.getToken();
+          if (token != null) {
+            final dt = DateTime.parse(newExpiresIso).toUtc();
+            final epochMs = dt.millisecondsSinceEpoch;
+            await TokenStorage.saveToken(token, expiresAtEpochMs: epochMs);
+          }
+        } catch (e) {
+          debugPrint('failed to persist refreshed expiry: $e');
+        }
+
+        // attempt to fetch profile again
+        try {
+          final refreshedProfile = await _auth.validateSession();
+          if (refreshedProfile != null) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString(
+                'profile_name', refreshedProfile['name']?.toString() ?? '');
+            await prefs.setString(
+                'profile_email', refreshedProfile['email']?.toString() ?? '');
+            if (refreshedProfile['avatar_url'] != null) {
+              await prefs.setString(
+                  'profile_avatar', refreshedProfile['avatar_url'].toString());
+            }
+            if (mounted) _loadProfileInfo();
+          }
+        } catch (_) {
+          // ignore - we've refreshed expiry and will not log out on transient errors
+        }
+
+        return;
+      }
+
+      // valid profile returned: update local profile & extend session
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('profile_name', profile['name']?.toString() ?? '');
+      await prefs.setString(
+          'profile_email', profile['email']?.toString() ?? '');
+      if (profile['avatar_url'] != null) {
+        await prefs.setString(
+            'profile_avatar', profile['avatar_url'].toString());
+      }
+
+      final newExpiresIso = await _auth.refreshSession();
+      if (newExpiresIso != null) {
+        try {
+          final dt = DateTime.parse(newExpiresIso).toUtc();
+          final epochMs = dt.millisecondsSinceEpoch;
+          final currentToken = await TokenStorage.getToken();
+          if (currentToken != null) {
+            await TokenStorage.saveToken(currentToken,
+                expiresAtEpochMs: epochMs);
+          }
+        } catch (e) {
+          debugPrint('failed to persist refreshed expiry: $e');
+        }
+      }
+
+      if (mounted) _loadProfileInfo();
+    } on Exception catch (e) {
+      // network/server error — do not log the user out for transient errors.
+      debugPrint('background session validation failed (non-fatal): $e');
+    }
+  }
+
+  Future<void> _loadProfileInfo() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final name = prefs.getString('profile_name') ?? '';
+      final avatarRaw = prefs.getString('profile_avatar');
+
+      // determine initials and color
+      final initial = (name.trim().isNotEmpty) ? _initialsFromName(name) : 'K';
+      final color = _colorForName(
+          name.isNotEmpty ? name : (prefs.getString('profile_email') ?? ''));
+
+      Uint8List? bytes;
+      if (avatarRaw != null && avatarRaw.isNotEmpty) {
+        final trimmed = avatarRaw.trim();
+        if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+          try {
+            final cleaned =
+                trimmed.contains(',') ? trimmed.split(',').last : trimmed;
+            final decoded = base64Decode(cleaned);
+            if (decoded.isNotEmpty) bytes = decoded;
+          } catch (_) {
+            bytes = null;
+          }
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _profileName = name.isNotEmpty ? name : null;
+        _profileAvatarRaw = avatarRaw;
+        _profileAvatarBytes = bytes;
+        _profileInitial = initial;
+        _profileColor = color;
+      });
+    } catch (e) {
+      // ignore, keep defaults
+    }
+  }
+
+  String _initialsFromName(String name) {
+    final parts =
+        name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return 'K';
+    if (parts.length == 1) return parts[0][0].toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  Color _colorForName(String key) {
+    final k = key.trim();
+    final seed = k.isEmpty
+        ? 0
+        : k.runes.fold<int>(0, (h, c) => ((h * 31) + c) & 0x7fffffff);
+    final hue = seed % 360;
+    return HSLColor.fromAHSL(1.0, hue.toDouble(), 0.5, 0.45).toColor();
   }
 
   Future<void> _checkForUpdate() async {
@@ -139,14 +364,74 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _uploadSessions() async {
+    if (_savingUploads) return;
+    if (_sessions.isEmpty) {
+      if (mounted) AppNotifier.showSnack(context, 'No sessions to upload');
+      return;
+    }
+
+    setState(() => _savingUploads = true);
+    try {
+      // prepare payload for server. includes capture_id, subject, start_time, end_time
+      final captures = _sessions.map((s) {
+        return {
+          'capture_id': s.id,
+          'subject': s.subject,
+          // map local model names to server expected keys
+          'start_time': s.startTime,
+          'end_time': s.endTime,
+          'date': s.date,
+        };
+      }).toList();
+
+      final uploaded = await _auth.uploadCaptures(captures);
+      if (!mounted) return;
+      AppNotifier.showSnack(context, 'Uploaded $uploaded sessions');
+
+      // optional: refresh local list (in case server returns changed state / you want to mark synced)
+      await _refresh();
+    } catch (e) {
+      if (mounted) {
+        AppNotifier.showSnack(context, 'Upload failed: ${e.toString()}');
+      }
+    } finally {
+      if (mounted) setState(() => _savingUploads = false);
+    }
+  }
+
   bool _drawerTitleExpanded = false;
 
   Widget _buildProfileAvatar() {
-    // TODO: replace with real profile thumbnail from auth/profile store
-    // Keep visible even if offline so user sees they're still ligged in locally
-    // here we simply render a letter or default icon
-    final name = 'K';
-    return Text(name, style: const TextStyle(color: Colors.black));
+    // If we have a valid decoded avatar image, use it; otherwise show generated initials avatar.
+    if (_profileAvatarBytes != null && _profileAvatarBytes!.isNotEmpty) {
+      return ClipOval(
+        child: Image.memory(
+          _profileAvatarBytes!,
+          width: 28,
+          height: 28,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          errorBuilder: (_, __, ___) {
+            return Text(_profileInitial,
+                style: const TextStyle(color: Colors.black));
+          },
+        ),
+      );
+    }
+
+    return Container(
+      width: 28,
+      height: 28,
+      decoration: BoxDecoration(
+        color: _profileColor,
+        shape: BoxShape.circle,
+      ),
+      alignment: Alignment.center,
+      child: Text(_profileInitial,
+          style: const TextStyle(
+              color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+    );
   }
 
   @override
@@ -212,6 +497,29 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         actions: [
+          // save/upload local capture sessions to server
+          Padding(
+            padding: const EdgeInsets.only(right: 8.0),
+            child: _savingUploads
+                ? const SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: Center(
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  )
+                : IconButton(
+                    tooltip: 'Save sessions to server',
+                    onPressed: () async {
+                      await _uploadSessions();
+                    },
+                    icon: const Icon(Icons.cloud_upload),
+                  ),
+          ),
           IconButton(
             tooltip: _updateAvailable ? 'Open update' : 'Check for updates',
             onPressed: () async {
@@ -265,14 +573,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
               ),
 
-              // center: profile avatar (tappable)
               GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const LoginScreen()),
-                  );
-                },
+                onTap: _onProfileTap,
                 child: CircleAvatar(
                   radius: 18,
                   backgroundColor: Theme.of(context).colorScheme.onPrimary,
