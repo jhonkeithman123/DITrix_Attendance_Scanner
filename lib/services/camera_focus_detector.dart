@@ -1,4 +1,5 @@
 import 'package:camera/camera.dart';
+// ignore: unused_import
 import 'package:flutter/foundation.dart';
 
 // Lightweight focus/scene-change detector based on luminance variance.

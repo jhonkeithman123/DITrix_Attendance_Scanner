@@ -120,7 +120,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     final m = now.minute.toString().padLeft(2, '0');
     final s = now.second.toString().padLeft(2, '0');
     final line = '[$h:$m:$s] $msg';
-    debugPrint(line);
+    // debugPrint(line);
     if (!mounted) return;
     setState(() {
       _uiLogs.add(line);
