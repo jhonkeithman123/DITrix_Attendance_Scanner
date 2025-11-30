@@ -11,7 +11,7 @@ class AuthService {
   // BaseUrl via constructor so it's easy to override for emulator / prod
   final String _baseUrl;
 
-  AuthService({String? baseUrl})
+  AuthService({String? baseUrl = "https://will-be-replaced-later/api"})
       : _baseUrl = baseUrl ??
             // default to local dev IP; for Android emulator use 10.0.2.2'
             'http://localhost:5600';
