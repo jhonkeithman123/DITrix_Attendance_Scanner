@@ -8,8 +8,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/token_storage.dart';
 
 class AuthService {
-  // Replace localhost with your API host if needed
-  static const String _baseUrl = 'http://192.168.1.3:5600';
+  // BaseUrl via constructor so it's easy to override for emulator / prod
+  final String _baseUrl;
+
+  AuthService({String? baseUrl})
+      : _baseUrl = baseUrl ??
+            // default to local dev IP; for Android emulator use 10.0.2.2'
+            'http://localhost:5600';
 
   // helper to POST JSON with timeout and clearer errors
   Future<http.Response> _postJson(String path, Map<String, dynamic> body,
@@ -21,6 +26,7 @@ class AuthService {
               headers: {'Content-Type': 'application/json'},
               body: jsonEncode(body))
           .timeout(timeout);
+      _checkServiceUnavailable(resp);
       return resp;
     } on TimeoutException {
       throw Exception('Request timed out. Is the server running at $_baseUrl?');
@@ -29,7 +35,6 @@ class AuthService {
     }
   }
 
-  // ignore: unused_element
   Future<http.Response> _authedPost(String path, Map<String, dynamic> body,
       {Duration timeout = const Duration(seconds: 10)}) async {
     final token = await TokenStorage.getToken();
@@ -44,6 +49,7 @@ class AuthService {
       final resp = await http
           .post(uri, headers: headers, body: jsonEncode(body))
           .timeout(timeout);
+      _checkServiceUnavailable(resp);
       return resp;
     } on TimeoutException {
       throw Exception('Request timed out. Is the server running at $_baseUrl?');
@@ -52,7 +58,6 @@ class AuthService {
     }
   }
 
-  // ignore: unused_element
   Future<http.Response> _authedPut(String path, Map<String, dynamic> body,
       {Duration timeout = const Duration(seconds: 10)}) async {
     final token = await TokenStorage.getToken();
@@ -67,6 +72,7 @@ class AuthService {
       final resp = await http
           .put(uri, headers: headers, body: jsonEncode(body))
           .timeout(timeout);
+      _checkServiceUnavailable(resp);
       return resp;
     } on TimeoutException {
       throw Exception('Request timed out. Is the server running at $_baseUrl?');
@@ -88,6 +94,7 @@ class AuthService {
       final resp = await http
           .patch(uri, headers: headers, body: jsonEncode(body))
           .timeout(timeout);
+      _checkServiceUnavailable(resp);
       return resp;
     } on TimeoutException {
       throw Exception('Request timed out. Is the server running at $_baseUrl?');
@@ -105,11 +112,19 @@ class AuthService {
               headers: {'Content-Type': 'application/json'},
               body: jsonEncode(body))
           .timeout(timeout);
+      _checkServiceUnavailable(resp);
       return resp;
     } on TimeoutException {
       throw Exception('Request timed out. Is the server running at $_baseUrl?');
     } on SocketException {
       throw Exception('Network error. Unable to reach server at $_baseUrl');
+    }
+  }
+
+  void _checkServiceUnavailable(http.Response resp) {
+    if (resp.statusCode == 503) {
+      throw Exception(
+          'Server temporarily unavailable (DB down). Try again later.');
     }
   }
 
@@ -143,6 +158,7 @@ class AuthService {
     }
   }
 
+  // update usages that call URIs without base (they already mostly use $_baseUrl)
   Future<bool> signIn({
     required String email,
     required String password,
