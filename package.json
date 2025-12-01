@@ -1,8 +1,0 @@
-{
-  "name": "ditrix-root",
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "build": "cd server && npm ci"
-  }
-}
