@@ -20,7 +20,7 @@ class AuthService {
 
   // helper to POST JSON with timeout and clearer errors
   Future<http.Response> _postJson(String path, Map<String, dynamic> body,
-      {Duration timeout = const Duration(seconds: 10)}) async {
+      {Duration timeout = const Duration(seconds: 120)}) async {
     final uri = Uri.parse('$_baseUrl$path');
     try {
       final resp = await http
@@ -38,7 +38,7 @@ class AuthService {
   }
 
   Future<http.Response> _authedPost(String path, Map<String, dynamic> body,
-      {Duration timeout = const Duration(seconds: 10)}) async {
+      {Duration timeout = const Duration(seconds: 120)}) async {
     final token = await TokenStorage.getToken();
     if (token == null) throw Exception("Not authenticated");
 
@@ -61,7 +61,7 @@ class AuthService {
   }
 
   Future<http.Response> _authedPut(String path, Map<String, dynamic> body,
-      {Duration timeout = const Duration(seconds: 10)}) async {
+      {Duration timeout = const Duration(seconds: 120)}) async {
     final token = await TokenStorage.getToken();
     if (token == null) throw Exception("Not authenticated");
 
@@ -85,7 +85,7 @@ class AuthService {
 
   // ignore: unused_element
   Future<http.Response> _authedPatch(String path, Map<String, dynamic> body,
-      {Duration timeout = const Duration(seconds: 10)}) async {
+      {Duration timeout = const Duration(seconds: 120)}) async {
     final token = await TokenStorage.getToken();
     final uri = Uri.parse('$_baseUrl$path');
     final headers = {
@@ -106,7 +106,7 @@ class AuthService {
   }
 
   Future<http.Response> _patchJson(String path, Map<String, dynamic> body,
-      {Duration timeout = const Duration(seconds: 8)}) async {
+      {Duration timeout = const Duration(seconds: 120)}) async {
     final uri = Uri.parse('$_baseUrl$path');
     try {
       final resp = await http
@@ -136,12 +136,12 @@ class AuthService {
     final token = await TokenStorage.getToken();
     if (token == null) return null;
 
-    final uri = Uri.parse('/auth/session');
+    final uri = Uri.parse('$_baseUrl/auth/session');
     try {
       final resp = await http.get(uri, headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
-      }).timeout(const Duration(seconds: 8));
+      }).timeout(const Duration(seconds: 120));
 
       if (resp.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(resp.body);
@@ -211,13 +211,13 @@ class AuthService {
     required String password,
     required String name,
   }) async {
+    // POST to signup (was incorrectly using /auth/login)
     final resp = await _postJson(
-        '/auth/login', {'email': email, 'password': password, 'name': name});
+        '/auth/signup', {'email': email, 'password': password, 'name': name});
 
     if (resp.statusCode == 200 || resp.statusCode == 201) {
       try {
         final Map<String, dynamic> body = jsonDecode(resp.body);
-        // normalize notice to a simple string under 'noticeText' for UI use
         if (body.containsKey('notice')) {
           body['noticeText'] = body['notice']?.toString();
         }
