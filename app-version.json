@@ -1,5 +1,5 @@
 {
-  "latest_version": "1.1.3",
+  "latest_version": "1.2.0",
   "minimum_required_version": "1.0.1",
   "update_urls": {
     "arm64-v8a": "https://github.com/jhonkeithman123/DITrix_Attendance_Scanner/releases/download/1.2.0/DITrix_Attendance_Scanner-arm64-v8a.apk",
