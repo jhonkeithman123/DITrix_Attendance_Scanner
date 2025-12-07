@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../scanner_service/scan.dart';
 import '../services/file_io_service.dart';
@@ -31,6 +32,10 @@ class CaptureIdScreen extends StatefulWidget {
   final String? initialStartTime; // expected "HH:mm"
   final String? initialEndTime; // expected "HH:mm"
 
+  // If false, UI will prevent editing subject / start/end times.
+  // SharedCaptureScreen should set this to true only for owner/editor roles.
+  final bool allowEditMetadata;
+
   const CaptureIdScreen({
     super.key,
     required this.sessionId,
@@ -39,6 +44,7 @@ class CaptureIdScreen extends StatefulWidget {
     this.initialSubject,
     this.initialStartTime,
     this.initialEndTime,
+    this.allowEditMetadata = true,
   });
 
   @override
@@ -49,6 +55,14 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     with WidgetsBindingObserver {
   final _sessionStore = SessionStore();
   Session? _session;
+  bool _cameraInitError = false;
+  String? _cameraErrorMsg;
+
+  // Image picker for gallery-based scans
+  final ImagePicker _picker = ImagePicker();
+
+  // Some devices/plugins can't support image stream reliably; track support to avoid repeated errors
+  bool _supportsImageStream = true;
 
   DateTime selectedDate = DateTime.now();
   List<Map<String, dynamic>> roster = [];
@@ -158,7 +172,10 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     _scanner = ScannerService(onLog: _log);
     _loadPrefs();
     _loadSession();
-    _initCamera();
+    // Defer camera init until after the first frame / navigation transition completes.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initCamera();
+    });
     _pruneExistingCapturesOnStartup();
     // create detector but don't reference camera here; it will be used after init
     _focusDetector = CameraFocusDetector(
@@ -217,7 +234,16 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     // Best-effort final save (cannot await in dispose)
     _saveSession();
     WidgetsBinding.instance.removeObserver(this);
-    _cameraController?.dispose();
+    try {
+      if (_cameraController != null) {
+        if (_cameraController!.value.isStreamingImages) {
+          try {
+            _cameraController!.stopImageStream();
+          } catch (_) {}
+        }
+        _cameraController!.dispose();
+      }
+    } catch (_) {}
     _focusDetector.dispose();
     super.dispose();
   }
@@ -232,6 +258,20 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
 
   Future<void> _initCamera() async {
     try {
+      // clean up previous controller to avoid multiple active use-cases
+      if (_cameraController != null) {
+        try {
+          // stop stream first if active (prevents "use case already attached")
+          if (_cameraController!.value.isStreamingImages) {
+            try {
+              await _cameraController!.stopImageStream();
+            } catch (_) {}
+          }
+          await _cameraController!.dispose();
+        } catch (_) {}
+        _cameraController = null;
+        _isCameraInitialized = false;
+      }
       final cameras = await availableCameras();
       if (cameras.isEmpty) return;
 
@@ -250,17 +290,35 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       try {
         await _cameraController!.setExposurePoint(const Offset(0.5, 0.5));
       } catch (_) {}
-      // start streaming frames into the extracted focus detector
-      try {
-        _cameraController!
-            .startImageStream((img) => _focusDetector.handleImage(img));
-      } catch (_) {
-        // some devices/plugins don't support simultaneous stream+takePicture
+      // start streaming frames into the extracted focus detector if supported
+      if (_supportsImageStream) {
+        try {
+          if (!_cameraController!.value.isStreamingImages) {
+            _cameraController!
+                .startImageStream((img) => _focusDetector.handleImage(img));
+          }
+        } catch (e) {
+          // mark unsupported so we don't repeatedly try and trigger errors/race conditions
+          _supportsImageStream = false;
+          _log('startImageStream failed, disabling image-stream usage: $e');
+        }
       }
       if (!mounted) return;
-      setState(() => _isCameraInitialized = true);
+      setState(() {
+        _isCameraInitialized = true;
+        _cameraInitError = false;
+        _cameraErrorMsg = null;
+      });
     } catch (e) {
       _log('Camera init error: $e');
+      if (mounted) {
+        setState(() {
+          _cameraInitError = true;
+          _cameraErrorMsg = e.toString();
+        });
+        // show a visible error to the user when camera init fails while opened from shared screen
+        AppNotifier.showSnack(context, 'Camera unavailable: $e');
+      }
     }
   }
 
@@ -272,11 +330,29 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       }
       try {
         await _cameraController!.resumePreview();
+        // ensure image stream running if supported
+        if (_supportsImageStream &&
+            !_cameraController!.value.isStreamingImages) {
+          try {
+            _cameraController!
+                .startImageStream((img) => _focusDetector.handleImage(img));
+          } catch (e) {
+            _supportsImageStream = false;
+            _log('startImageStream on toggle failed: $e');
+          }
+        }
       } catch (_) {}
       if (!mounted) return;
       setState(() => _cameraEnabled = true);
     } else {
       try {
+        // stop streaming before pausing to avoid plugin race conditions
+        if (_cameraController != null &&
+            _cameraController!.value.isStreamingImages) {
+          try {
+            await _cameraController!.stopImageStream();
+          } catch (_) {}
+        }
         await _cameraController?.pausePreview();
       } catch (_) {
         await _cameraController?.dispose();
@@ -346,6 +422,15 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   }
 
   Future<void> _promptSubjectAndTime() async {
+    if (!widget.allowEditMetadata) {
+      // prevent editing when opened from a shared capture where user is not owner/editor
+      if (mounted) {
+        AppNotifier.showSnack(
+            context, 'Only owner or co-owner may change subject/time');
+      }
+      return;
+    }
+
     final subjectCtrl = TextEditingController(text: subject);
     TimeOfDay tempStart = classStartTime;
     TimeOfDay tempEnd = classEndTime;
@@ -762,6 +847,202 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       if (mounted) {
         AppNotifier.showSnack(context, 'Capture failed');
       }
+    }
+  }
+
+  // Pick an existing image from gallery and process it like a capture
+  Future<void> _pickImageFromGallery() async {
+    // Ensure subject/time set
+    final missingSubject = subject.trim().isEmpty;
+    final missingStart =
+        (classStartTime.hour == 0 && classStartTime.minute == 0);
+    final missingEnd = (classEndTime.hour == 0 && classEndTime.minute == 0);
+    if (missingSubject || missingStart || missingEnd) {
+      final doSet = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Set subject and times'),
+          content: const Text(
+              'Please set the Subject, Class start and Class dismiss times before scanning.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Later')),
+            ElevatedButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Set now')),
+          ],
+        ),
+      );
+      if (doSet == true) {
+        await _promptSubjectAndTime();
+      } else {
+        return;
+      }
+    }
+
+    try {
+      final picked = await _picker.pickImage(
+          source: ImageSource.gallery, imageQuality: 90);
+      if (picked == null) return;
+      final file = File(picked.path);
+      // process picked file similarly to captured images
+      Map<String, dynamic>? scanResult;
+      try {
+        final res = await _cleanAndUploadImage(file);
+        scanResult = res['scan'] as Map<String, dynamic>?;
+      } catch (e) {
+        _log('Gallery image processing failed: $e');
+      }
+
+      setState(() {
+        _lastScan = (scanResult ?? <String, dynamic>{});
+      });
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final id = (_lastScan?['student_number'] ?? '').toString();
+        final name = (_lastScan?['surname'] ?? '').toString();
+        AppNotifier.showSnack(
+            context,
+            id.isEmpty && name.isEmpty
+                ? 'OCR empty'
+                : 'OCR -> id=$id name=$name',
+            duration: const Duration(seconds: 3));
+      });
+
+      // Try auto-match/mark just like capture flow
+      if (scanResult != null && scanResult.isNotEmpty) {
+        final scannedNumber = (scanResult['student_number'] ?? '')
+            .toString()
+            .toLowerCase()
+            .trim();
+        final scannedSurname =
+            (scanResult['surname'] ?? scanResult['analyzed'] ?? '')
+                .toString()
+                .toLowerCase()
+                .trim();
+
+        if (scannedNumber.isNotEmpty) {
+          final normScanId = _normalizeId(scannedNumber);
+          final idIdx = roster.indexWhere(
+              (r) => _normalizeId((r['id'] ?? '').toString()) == normScanId);
+          if (idIdx != -1) {
+            final now = DateTime.now();
+            final status = _computeStatus(now);
+            if (!mounted) return;
+            setState(() {
+              roster[idIdx]['present'] = true;
+              roster[idIdx]['time'] = now.toIso8601String();
+              roster[idIdx]['status'] = status;
+            });
+            AppNotifier.showSnack(context,
+                'Auto-matched "${roster[idIdx]['name']}" by ID ($status)');
+            await _saveSession();
+            return;
+          }
+          final add = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Unknown ID'),
+              content: Text(
+                  'Scanned student ID "$scannedNumber" was not found. Add to class and mark present?'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    child: const Text('No')),
+                ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    child: const Text('Yes, add & mark')),
+              ],
+            ),
+          );
+          if (add == true) {
+            final now = DateTime.now();
+            final status = _computeStatus(now);
+            final displayName = scannedSurname.isNotEmpty
+                ? scannedSurname
+                    .split(RegExp(r'\s+'))
+                    .map((s) => s.isEmpty
+                        ? s
+                        : '${s[0].toUpperCase()}${s.substring(1)}')
+                    .join(' ')
+                : scannedNumber;
+            if (!mounted) return;
+            setState(() {
+              roster.add({
+                'id': scannedNumber,
+                'name': displayName,
+                'present': true,
+                'time': now.toIso8601String(),
+                'status': status
+              });
+            });
+            AppNotifier.showSnack(
+                context, 'Added $displayName and marked present ($status)');
+            await _saveSession();
+            return;
+          }
+        }
+
+        if (scannedSurname.isNotEmpty) {
+          double bestScore = 0.0;
+          int bestIdx = -1;
+          for (var entry in roster.asMap().entries) {
+            final idx = entry.key;
+            final rosterSurname =
+                _extractSurnameFromName((entry.value['name'] ?? '').toString());
+            final score = _nameSimilarity(rosterSurname, scannedSurname);
+            if (score > bestScore) {
+              bestScore = score;
+              bestIdx = idx;
+            }
+          }
+          const double threshold = 0.65;
+          if (bestIdx != -1 && bestScore >= threshold) {
+            final now = DateTime.now();
+            final status = _computeStatus(now);
+            if (!mounted) return;
+            setState(() {
+              roster[bestIdx]['present'] = true;
+              roster[bestIdx]['time'] = now.toIso8601String();
+              roster[bestIdx]['status'] = status;
+            });
+            AppNotifier.showSnack(context,
+                'Auto-matched "${roster[bestIdx]['name']}" by name ($status)');
+            await _saveSession();
+            return;
+          }
+        }
+      }
+
+      // fallback to manual tagging sheet
+      if (!mounted) return;
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => _TaggingSheet(
+          roster: roster,
+          onTag: (index) async {
+            if (!mounted) return;
+            final now = DateTime.now();
+            final status = _computeStatus(now);
+            setState(() {
+              roster[index]['present'] = true;
+              roster[index]['time'] = now.toIso8601String();
+              roster[index]['status'] = status;
+            });
+            Navigator.of(ctx).pop();
+            AppNotifier.showSnack(
+                context, 'Marked "${roster[index]['name']}" present ($status)');
+            await _saveSession();
+          },
+          imageFile: file,
+        ),
+      );
+    } catch (e) {
+      _log('Gallery pick error: $e');
+      if (mounted)
+        AppNotifier.showSnack(context, 'Failed to process selected image: $e');
     }
   }
 
@@ -1296,6 +1577,25 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                // attendance counts (present / total)
+                                Builder(builder: (ctx) {
+                                  final presentCount = roster
+                                      .where((r) => r['present'] == true)
+                                      .length;
+                                  final totalCount = roster.length;
+                                  return Row(
+                                    children: [
+                                      _InfoChip(
+                                          icon: Icons.check_circle,
+                                          label: 'Present: $presentCount'),
+                                      const SizedBox(width: 8),
+                                      _InfoChip(
+                                          icon: Icons.group,
+                                          label: 'Total: $totalCount'),
+                                    ],
+                                  );
+                                }),
+                                const SizedBox(height: 6),
                                 Text(
                                   subject.isEmpty ? 'No subject' : subject,
                                   style: const TextStyle(
@@ -1348,11 +1648,75 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: (_cameraEnabled &&
-                      _isCameraInitialized &&
-                      _cameraController != null)
-                  ? CameraPreview(_cameraController!)
-                  : const Center(child: Text('Camera disabled')),
+              child: Stack(
+                children: [
+                  // show a contextual placeholder while initializing / disabled / unavailable
+                  Builder(builder: (ctx) {
+                    if (_cameraInitError) {
+                      return const Center(child: Text('Camera unavailable'));
+                    }
+                    if (!_cameraEnabled) {
+                      return const Center(child: Text('Camera is turned off'));
+                    }
+                    if (!_isCameraInitialized || _cameraController == null) {
+                      return const Center(child: Text('Initializing camera…'));
+                    }
+                    return CameraPreview(_cameraController!);
+                  }),
+                  if (_cameraInitError)
+                    Positioned.fill(
+                      child: Container(
+                        color: Colors.black54,
+                        child: Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16.0),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.camera_alt,
+                                    size: 48, color: Colors.white70),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Camera init failed',
+                                  style: const TextStyle(
+                                      color: Colors.white, fontSize: 16),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  _cameraErrorMsg ??
+                                      'Permission or device error',
+                                  style: const TextStyle(
+                                      color: Colors.white70, fontSize: 12),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 12),
+                                ElevatedButton.icon(
+                                  icon: const Icon(Icons.refresh),
+                                  label: const Text('Retry'),
+                                  onPressed: () async {
+                                    setState(() {
+                                      _cameraInitError = false;
+                                      _cameraErrorMsg = null;
+                                    });
+                                    await _initCamera();
+                                  },
+                                ),
+                                const SizedBox(height: 6),
+                                TextButton(
+                                    onPressed: () {
+                                      AppNotifier.showSnack(context,
+                                          'If permission denied, allow Camera in system settings for this app.');
+                                    },
+                                    child: const Text(
+                                        'How to allow camera permission')),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
           if (_developerMode && _showLogs)
@@ -1556,6 +1920,13 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                     label: const Text('capture'),
                     onPressed: _captureAndTag,
                   ),
+                ),
+                const SizedBox(width: 12),
+                // New: allow picking an existing image when camera unavailable
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.photo_library),
+                  label: const Text('Scan image'),
+                  onPressed: _pickImageFromGallery,
                 ),
                 const SizedBox(width: 12),
                 ElevatedButton.icon(

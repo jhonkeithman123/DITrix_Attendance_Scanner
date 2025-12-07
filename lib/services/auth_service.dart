@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/token_storage.dart';
@@ -377,13 +378,73 @@ class AuthService {
     return;
   }
 
+  /// Upload avatar image file (multipart/form-data PUT /profile)
+  Future<Map<String, dynamic>> uploadProfileAvatar(File imageFile,
+      {String? name}) async {
+    final token = await TokenStorage.getToken();
+    if (token == null) throw Exception("Not authenticated");
+
+    final uri = Uri.parse('$_baseUrl/profile');
+    final req = http.MultipartRequest('PUT', uri);
+    req.headers['Authorization'] = 'Bearer $token';
+    // attach optional name as field
+    if (name != null) req.fields['name'] = name;
+
+    final mimeType = lookupMimeType(imageFile.path) ?? 'image/jpeg';
+    final parts = mimeType.split('/');
+    req.files.add(await http.MultipartFile.fromPath(
+      'avatar',
+      imageFile.path,
+      contentType: MediaType(parts[0], parts[1]),
+    ));
+
+    final streamed = await req.send().timeout(const Duration(seconds: 60));
+    final resp = await http.Response.fromStream(streamed);
+    if (resp.statusCode != 200) {
+      String msg = resp.body.isNotEmpty ? resp.body : 'Upload failed';
+      try {
+        final parsed = jsonDecode(resp.body);
+        msg = (parsed['error'] ?? parsed['message'] ?? msg).toString();
+      } catch (_) {}
+      throw Exception('Avatar upload failed: ${resp.statusCode} - $msg');
+    }
+    final Map<String, dynamic> body = jsonDecode(resp.body);
+    return body;
+  }
+
+// helper to get mime type
+  String? lookupMimeType(String path) {
+    final ext = path.split('.').last.toLowerCase();
+    switch (ext) {
+      case 'png':
+        return 'image/png';
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      default:
+        return null;
+    }
+  }
+
   /// upload local capture sessions to server
   Future<int> uploadCaptures(List<Map<String, dynamic>> captures) async {
     final resp = await _authedPost('/sync/captures', {'captures': captures});
 
     if (resp.statusCode != 200) {
-      throw Exception('Upload failed: ${resp.statusCode}');
+      // Try to extract a helpful message from the server response
+      String serverMsg = resp.body;
+      try {
+        final Map<String, dynamic> parsed = jsonDecode(resp.body);
+        serverMsg =
+            (parsed['error'] ?? parsed['message'] ?? serverMsg).toString();
+      } catch (_) {}
+      throw Exception('Upload failed: ${resp.statusCode} - $serverMsg');
     }
+
     final body = jsonDecode(resp.body);
     return (body['uploaded'] is int) ? body['uploaded'] as int : 0;
   }

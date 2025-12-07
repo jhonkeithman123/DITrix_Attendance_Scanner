@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 
 import '../models/session.dart';
 import '../services/token_storage.dart';
@@ -50,6 +52,10 @@ class _HomeScreenState extends State<HomeScreen> {
   String _latestVersion = '';
   String? _updateUrl;
 
+  // track authenticated state for conditional UI in shared tabs
+  bool _authenticated = false;
+  bool _loadingProfileInfo = false;
+
   static const String _versionCheckUrl =
       "https://raw.githubusercontent.com/jhonkeithman123/DITrix_Attendance_Scanner/main/app-version.json";
 
@@ -84,7 +90,9 @@ class _HomeScreenState extends State<HomeScreen> {
             '[HomeScreen] using local cached profile, navigating optimistically');
         // optimistic navigation: show profile immediately, validate in background
         if (!mounted) return;
-        Navigator.pushNamed(context, '/profile');
+        await Navigator.pushNamed(context, '/profile');
+        // refresh avatar after returning
+        if (mounted) await _loadProfileInfo();
         _validateSessionInBackground();
         return;
       }
@@ -106,7 +114,8 @@ class _HomeScreenState extends State<HomeScreen> {
               'profile_avatar', profile['avatar_url'].toString());
         }
         if (!mounted) return;
-        Navigator.pushNamed(context, '/profile');
+        await Navigator.pushNamed(context, '/profile');
+        if (mounted) await _loadProfileInfo();
         return;
       }
 
@@ -230,41 +239,62 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadProfileInfo() async {
+    if (_loadingProfileInfo) return;
+    _loadingProfileInfo = true;
+    setState(() => _checkingProfile = true);
     try {
       final prefs = await SharedPreferences.getInstance();
       final name = prefs.getString('profile_name') ?? '';
-      final avatarRaw = prefs.getString('profile_avatar');
+      final avatarRaw = prefs.getString('profile_avatar') ?? '';
+      _profileName = name;
+      _profileInitial =
+          _initialsFromName(name).isEmpty ? 'K' : _initialsFromName(name);
+      _profileColor = _colorForName(name);
+      _profileAvatarBytes = null;
+      _profileAvatarRaw = null;
 
-      // determine initials and color
-      final initial = (name.trim().isNotEmpty) ? _initialsFromName(name) : 'K';
-      final color = _colorForName(
-          name.isNotEmpty ? name : (prefs.getString('profile_email') ?? ''));
-
-      Uint8List? bytes;
-      if (avatarRaw != null && avatarRaw.isNotEmpty) {
+      if (avatarRaw.isNotEmpty) {
         final trimmed = avatarRaw.trim();
-        if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+        if (trimmed.startsWith('data:')) {
+          // data:<mime>;base64,...
+          final idx = avatarRaw.indexOf(',');
+          if (idx != -1) {
+            final b64 = trimmed.substring(idx + 1);
+            try {
+              _profileAvatarBytes = base64Decode(b64);
+            } catch (_) {
+              _profileAvatarBytes = null;
+            }
+          }
+        } else if (avatarRaw.startsWith('http://') ||
+            avatarRaw.startsWith('https://')) {
+          // prefer to use the remote URL as-is (NetworkImage)
+          _profileAvatarRaw = avatarRaw;
+        } else {
+          // maybe plain base64 without data: prefix
           try {
-            final cleaned =
-                trimmed.contains(',') ? trimmed.split(',').last : trimmed;
-            final decoded = base64Decode(cleaned);
-            if (decoded.isNotEmpty) bytes = decoded;
+            _profileAvatarBytes = base64Decode(trimmed);
           } catch (_) {
-            bytes = null;
+            // fallback: try fetching as URL
+            try {
+              final uri = Uri.parse(avatarRaw);
+              final resp =
+                  await http.get(uri).timeout(const Duration(seconds: 8));
+              if (resp.statusCode == 200) _profileAvatarBytes = resp.bodyBytes;
+            } catch (_) {
+              _profileAvatarBytes = null;
+              _profileAvatarRaw = null;
+            }
           }
         }
       }
 
-      if (!mounted) return;
-      setState(() {
-        _profileName = name.isNotEmpty ? name : null;
-        _profileAvatarRaw = avatarRaw;
-        _profileAvatarBytes = bytes;
-        _profileInitial = initial;
-        _profileColor = color;
-      });
+      if (mounted) setState(() {});
     } catch (e) {
-      // ignore, keep defaults
+      print('[HomeScreen] _loadProfileInfo error: $e');
+    } finally {
+      if (mounted) setState(() => _checkingProfile = false);
+      _loadingProfileInfo = false;
     }
   }
 
@@ -371,45 +401,274 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _uploadSessions() async {
-    if (_savingUploads) return;
-    if (_sessions.isEmpty) {
-      if (mounted) AppNotifier.showSnack(context, 'No sessions to upload');
+  /// Open a multi-select dialog for uploading local sessions into shared captures.
+  Future<void> _openUploadChooser() async {
+    print('[HomeScreen] _openUploadChooser called');
+    if (mounted) AppNotifier.showSnack(context, 'Opening upload chooser...');
+    final sessions = List<Session>.from(_sessions);
+    if (sessions.isEmpty) {
+      if (mounted) {
+        AppNotifier.showSnack(context, 'No local sessions to upload');
+      }
       return;
     }
 
+    // Build initial selection map
+    final selected = <String, bool>{};
+    for (final s in sessions) {
+      selected[s.id] = false;
+    }
+
+    String? chosenSharedId;
+    bool createNewShared = false;
+    final newSharedSubjectCtl = TextEditingController();
+    String? _subjectError;
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(builder: (ctx2, setState2) {
+          bool subjectIsDuplicate(String v) {
+            final s = v.trim().toLowerCase();
+            if (s.isEmpty) return false;
+            return _ownedCaptures.any((c) {
+              final subj =
+                  (c['subject'] as String?)?.trim().toLowerCase() ?? '';
+              return subj.isNotEmpty && subj == s;
+            });
+          }
+
+          void validateSubject(String v) {
+            if (v.trim().isEmpty) {
+              setState2(() => _subjectError = 'Subject required');
+              return;
+            }
+            if (subjectIsDuplicate(v)) {
+              setState2(() => _subjectError =
+                  'You already have a shared session with this subject');
+              return;
+            }
+            setState2(() => _subjectError = null);
+          }
+
+          final screenW = MediaQuery.of(ctx).size.width;
+          final screenH = MediaQuery.of(ctx).size.height;
+          final dialogW = math.min(560.0, screenW - 48.0);
+          final dialogMaxH = math.min(screenH * 0.85, 800.0);
+
+          // compute list height based on items (no huge empty gap)
+          final itemHeight = 72.0;
+          final visibleItems = (sessions.length).clamp(1, 8);
+          final listHeight =
+              math.min(dialogMaxH * 0.6, visibleItems * itemHeight + 8.0);
+
+          return Dialog(
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 24.0, vertical: 24.0),
+            child: ConstrainedBox(
+              constraints:
+                  BoxConstraints(maxWidth: dialogW, maxHeight: dialogMaxH),
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 6.0),
+                      child: Text('Upload sessions',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w600)),
+                    ),
+
+                    // sessions list (bounded height)
+                    SizedBox(
+                      height: listHeight,
+                      child: ListView.builder(
+                        padding: EdgeInsets.zero,
+                        physics: sessions.length > visibleItems
+                            ? const AlwaysScrollableScrollPhysics()
+                            : const NeverScrollableScrollPhysics(),
+                        itemCount: sessions.length,
+                        itemBuilder: (_, idx) {
+                          final s = sessions[idx];
+                          return CheckboxListTile(
+                            title: Text(s.subject.isEmpty
+                                ? 'Session ${s.id}'
+                                : s.subject),
+                            subtitle: Text(
+                                '${s.date} • ${s.startTime} - ${s.endTime}'),
+                            value: selected[s.id],
+                            contentPadding:
+                                const EdgeInsets.symmetric(horizontal: 8.0),
+                            onChanged: (v) =>
+                                setState2(() => selected[s.id] = v ?? false),
+                          );
+                        },
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    // dropdown (expand to dialog width)
+                    Builder(builder: (ddCtx) {
+                      final menuItemHeight = 48.0;
+                      final visibleMenuItems =
+                          (_ownedCaptures.length + 1).clamp(1, 6);
+                      final menuMax = math
+                          .min(dialogMaxH * 0.35,
+                              (visibleMenuItems * menuItemHeight) + 24.0)
+                          .clamp(120.0, 520.0);
+
+                      return DropdownButtonFormField<String>(
+                        isExpanded: true,
+                        isDense: true,
+                        itemHeight: menuItemHeight,
+                        menuMaxHeight: menuMax,
+                        value: chosenSharedId,
+                        hint: const Text(
+                            'Select existing shared session (optional)',
+                            overflow: TextOverflow.ellipsis),
+                        items: [
+                          const DropdownMenuItem(
+                              value: null, child: Text('None')),
+                          ..._ownedCaptures.map((c) {
+                            final id = c['id']?.toString() ?? '';
+                            final title =
+                                (c['subject'] as String?)?.isNotEmpty == true
+                                    ? c['subject']
+                                    : 'Session $id';
+                            return DropdownMenuItem(
+                                value: id,
+                                child: Text(title,
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1));
+                          }),
+                        ],
+                        onChanged: (v) => setState2(() {
+                          chosenSharedId = v;
+                          createNewShared = false;
+                        }),
+                      );
+                    }),
+
+                    const SizedBox(height: 6),
+
+                    Row(children: [
+                      Checkbox(
+                        value: createNewShared,
+                        onChanged: (v) => setState2(() {
+                          createNewShared = v ?? false;
+                          if (createNewShared) chosenSharedId = null;
+                        }),
+                      ),
+                      const Flexible(
+                          child: Text('Create new shared capture for uploads')),
+                    ]),
+
+                    if (createNewShared)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: TextField(
+                          controller: newSharedSubjectCtl,
+                          onChanged: (v) => validateSubject(v),
+                          decoration: InputDecoration(
+                            labelText: 'Subject for new shared capture',
+                            errorText: _subjectError,
+                          ),
+                        ),
+                      ),
+
+                    const SizedBox(height: 12),
+
+                    // actions
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                            onPressed: () => Navigator.of(ctx2).pop(),
+                            child: const Text('Cancel')),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: () async {
+                            final toUpload = sessions
+                                .where((s) => selected[s.id] == true)
+                                .toList();
+                            if (toUpload.isEmpty) {
+                              AppNotifier.showSnack(
+                                  context, 'Select at least one session');
+                              return;
+                            }
+                            if (createNewShared) {
+                              final subj = newSharedSubjectCtl.text.trim();
+                              validateSubject(subj);
+                              if (_subjectError != null) {
+                                AppNotifier.showSnack(context, _subjectError!);
+                                return;
+                              }
+                            }
+                            Navigator.of(ctx2).pop();
+                            await _uploadSelectedToShared(
+                                toUpload,
+                                chosenSharedId,
+                                createNewShared
+                                    ? newSharedSubjectCtl.text.trim()
+                                    : null);
+                          },
+                          child: const Text('Upload selected'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }),
+      );
+    } catch (e) {
+      print('[HomeScreen] _openUploadChooser error: $e');
+      if (mounted) {
+        AppNotifier.showSnack(context, 'Failed to open upload chooser: $e');
+      }
+    }
+  }
+
+  /// Upload selected local sessions to shared captures.
+  Future<void> _uploadSelectedToShared(List<Session> selectedSessions,
+      String? existingSharedId, String? newSharedSubject) async {
     setState(() => _savingUploads = true);
     try {
-      // prepare payload for server. includes capture_id, subject, start_time, end_time
-      final captures = _sessions.map((s) {
-        return {
-          'capture_id': s.id,
-          'subject': s.subject,
-          // map local model names to server expected keys
-          'start_time': s.startTime,
-          'end_time': s.endTime,
-          'date': s.date,
-        };
-      }).toList();
-
-      final uploaded = await _auth.uploadCaptures(captures);
-      if (!mounted) return;
-      AppNotifier.showSnack(context, 'Uploaded $uploaded sessions');
-
-      // optional: refresh local list (in case server returns changed state / you want to mark synced)
-      await _refresh();
-    } catch (e) {
-      if (!mounted) return;
-      final errorMsg = e.toString();
-      // Check if it's a duplicate error (409)
-      if (errorMsg.contains('already been uploaded')) {
-        AppNotifier.showSnack(
-          context,
-          'This capture has already been uploaded. Try a different session.',
-        );
-      } else {
-        AppNotifier.showSnack(context, 'Upload failed: $errorMsg');
+      // if user requested a new shared capture, create one per session (or one shared capture for all? - we'll create one per session to keep previous semantics)
+      for (final s in selectedSessions) {
+        try {
+          final result = await _sharedService.createCapture(
+            id: s.id,
+            subject: s.subject.isNotEmpty
+                ? s.subject
+                : (newSharedSubject ?? 'Session ${s.id}'),
+            date: s.date,
+            startTime: s.startTime,
+            endTime: s.endTime,
+            roster: s.roster
+                .map((r) => {
+                      'id': r['id'],
+                      'name': r['name'],
+                      'present': r['present'] ?? false,
+                      'time': r['time'],
+                      'status': r['status'],
+                    })
+                .toList(),
+            // if existingSharedId is provided we still call createCapture - server may decide to update/merge
+          );
+          if (!mounted) return;
+          AppNotifier.showSnack(context,
+              'Uploaded ${s.id} -> ${result['capture']?['share_code'] ?? 'ok'}');
+        } catch (e) {
+          AppNotifier.showSnack(context, 'Failed to upload ${s.id}: $e');
+        }
       }
+      await _refresh();
     } finally {
       if (mounted) setState(() => _savingUploads = false);
     }
@@ -421,8 +680,11 @@ class _HomeScreenState extends State<HomeScreen> {
     // Fetch shared captures if authenticated
     try {
       final token = await TokenStorage.getToken();
-      print('[HomeScreen] refresh - token present: ${token != null}');
-      if (token != null) {
+      final isAuth = token != null;
+      print('[HomeScreen] refresh - token present: $isAuth');
+      // update auth flag for builders
+      if (mounted) setState(() => _authenticated = isAuth);
+      if (isAuth) {
         final result = await _sharedService.listCaptures();
         print('[HomeScreen] listCaptures result: $result');
         if (!mounted) return;
@@ -457,6 +719,14 @@ class _HomeScreenState extends State<HomeScreen> {
           print(
               '[HomeScreen] owned: ${_ownedCaptures.length}, shared: ${_sharedCaptures.length}');
         });
+      } else {
+        // not authenticated: clear lists
+        if (mounted) {
+          setState(() {
+            _ownedCaptures = [];
+            _sharedCaptures = [];
+          });
+        }
       }
     } catch (e) {
       print('[HomeScreen] _refresh error: $e');
@@ -468,6 +738,21 @@ class _HomeScreenState extends State<HomeScreen> {
       _sessions = localList;
       _loading = false;
     });
+  }
+
+  /// Manual refetch wrapper used by AppBar refresh button.
+  /// Also shows simple feedback and prevents overlapping refreshes.
+  Future<void> _refetch() async {
+    if (_loading) return; // already refreshing
+    if (mounted) setState(() => _loading = true);
+    try {
+      await _refresh();
+      if (mounted) AppNotifier.showSnack(context, 'Refreshed');
+    } catch (e) {
+      if (mounted) AppNotifier.showSnack(context, 'Refresh failed: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   bool _drawerTitleExpanded = false;
@@ -567,6 +852,15 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         actions: [
+          // Refresh button to trigger a manual refetch (in addition to pull-down)
+          Padding(
+            padding: const EdgeInsets.only(right: 4.0),
+            child: IconButton(
+              tooltip: 'Refresh',
+              onPressed: _refetch,
+              icon: const Icon(Icons.refresh),
+            ),
+          ),
           // save/upload local capture sessions to server
           Padding(
             padding: const EdgeInsets.only(right: 8.0),
@@ -585,7 +879,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 : IconButton(
                     tooltip: 'Save sessions to server',
                     onPressed: () async {
-                      await _uploadSessions();
+                      await _openUploadChooser();
                     },
                     icon: const Icon(Icons.cloud_upload),
                   ),
@@ -882,6 +1176,22 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildOwnedList() {
+    if (!_authenticated) {
+      return ListView(
+        children: [
+          const SizedBox(height: 80),
+          const Center(child: Text('Log in to use this feature')),
+          const SizedBox(height: 12),
+          Center(
+            child: ElevatedButton(
+              onPressed: () => Navigator.pushNamed(context, '/login'),
+              child: const Text('Log in'),
+            ),
+          ),
+        ],
+      );
+    }
+
     if (_ownedCaptures.isEmpty) {
       return ListView(
         children: const [
@@ -946,6 +1256,22 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildSharedList() {
+    if (!_authenticated) {
+      return ListView(
+        children: [
+          const SizedBox(height: 80),
+          const Center(child: Text('Log in to use this feature')),
+          const SizedBox(height: 12),
+          Center(
+            child: ElevatedButton(
+              onPressed: () => Navigator.pushNamed(context, '/login'),
+              child: const Text('Log in'),
+            ),
+          ),
+        ],
+      );
+    }
+
     if (_sharedCaptures.isEmpty) {
       return ListView(
         children: [

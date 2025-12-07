@@ -6,7 +6,9 @@ import 'capture_id_screen.dart';
 
 class SharedCaptureScreen extends StatefulWidget {
   final String captureId;
-  const SharedCaptureScreen({super.key, required this.captureId});
+  final String role;
+  const SharedCaptureScreen(
+      {super.key, required this.captureId, this.role = 'viewer'});
 
   @override
   State<SharedCaptureScreen> createState() => _SharedCaptureScreenState();
@@ -330,6 +332,7 @@ class _SharedCaptureScreenState extends State<SharedCaptureScreen>
               tooltip: 'Open Capture UI',
               onPressed: () async {
                 // open CaptureIdScreen with the current roster so the collaborator sees the same list
+                final canEdit = _userRole == 'owner' || _userRole == 'editor';
                 await Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => CaptureIdScreen(
                     sessionId: 'shared-${widget.captureId}',
@@ -337,6 +340,7 @@ class _SharedCaptureScreenState extends State<SharedCaptureScreen>
                     initialSubject: _capture!['subject']?.toString(),
                     initialStartTime: _capture!['start_time']?.toString(),
                     initialEndTime: _capture!['end_time']?.toString(),
+                    allowEditMetadata: canEdit,
                     onRosterChanged: (newRoster) async {
                       if (!mounted) return;
                       setState(() {

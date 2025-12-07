@@ -86,8 +86,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final bg = _colorForName();
       try {
         final pngBase64 = await _generateAvatarPngBase64(initials, bg, 256);
-        setState(() => _avatarBase64 = pngBase64);
-        await prefs.setString('profile_avatar', pngBase64);
+        final dataUrl = 'data:image/png;base64,$pngBase64';
+        setState(() => _avatarBase64 = dataUrl);
+        await prefs.setString('profile_avatar', dataUrl);
       } catch (e) {
         // debugPrint('avatar generation failed: $e');
       }
@@ -165,8 +166,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final bytes = await file.readAsBytes();
       final base64Str = base64Encode(bytes);
 
+      // store as a data: URI so clients reliably detect/parse it
+      final mime = (file.path.toLowerCase().endsWith('.png'))
+          ? 'image/png'
+          : 'image/jpeg';
+      final dataUrl = 'data:$mime;base64,$base64Str';
       setState(() {
-        _avatarBase64 = base64Str;
+        _avatarBase64 = dataUrl;
       });
     } catch (e) {
       if (!mounted) return;
@@ -249,6 +255,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       builder: (ctx) => SafeArea(
         child: Wrap(children: [
           ListTile(
+            leading: const Icon(Icons.photo_library),
+            title: const Text('Choose from gallery'),
+            onTap: () {
+              Navigator.pop(ctx);
+              _pickImage(ImageSource.gallery);
+            },
+          ),
+          ListTile(
             leading: const Icon(Icons.camera_alt),
             title: const Text('Take a photo'),
             onTap: () {
@@ -287,7 +301,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
       await prefs.setString('profile_name', _nameCtl.text.trim());
 
       if (_avatarBase64 != null) {
-        await prefs.setString('profile_avatar', _avatarBase64!);
+        // ensure stored avatar is a data: URI (if caller passed raw base64, prefix it)
+        final toStore = _avatarBase64!.startsWith('data:')
+            ? _avatarBase64!
+            : 'data:image/jpeg;base64,${_avatarBase64!}';
+        await prefs.setString('profile_avatar', toStore);
       } else {
         await prefs.remove('profile_avatar');
       }
@@ -385,12 +403,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           : const Icon(Icons.save),
                       label: const Text('Save Profile'),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Avatar and name are stored locally. Server sync will be implemented in the future updates.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                    textAlign: TextAlign.center,
                   ),
                 ]),
               ),
