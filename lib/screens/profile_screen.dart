@@ -8,7 +8,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/app_notifier.dart';
 import '../services/auth_service.dart';
-import 'login_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -303,27 +302,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_token');
-    // preserve optional profile fields or clear them based on your UX needs:
-    // await prefs.remove('profile_name');
-    // await prefs.remove('profile_email');
-    // await prefs.remove('profile_avatar');
-
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (r) => false,
-    );
-  }
-
   @override
   void dispose() {
     _nameCtl.removeListener(_onNameChanged);
     _nameCtl.dispose();
     _emailCtl.dispose();
     super.dispose();
+  }
+
+  Future<void> _handleLogout() async {
+    try {
+      final confirm = await AppNotifier.showConfirm(context,
+          title: "Confirm Logout",
+          content: "Are you sure you want tolog out?",
+          cancelLabel: "Cancel",
+          confirmLabel: "Logout");
+      if (confirm != true) return;
+
+      if (!mounted) return;
+      AppNotifier.showLoading(context, message: "Logging out...");
+      await AuthService().logout();
+
+      if (!mounted) return;
+      Navigator.pop(context);
+      Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context);
+      AppNotifier.showSnack(context, "Logout failed: $e");
+    }
   }
 
   @override
@@ -336,7 +343,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         actions: [
           IconButton(
             tooltip: 'Logout',
-            onPressed: _logout,
+            onPressed: _handleLogout,
             icon: const Icon(Icons.logout),
           )
         ],

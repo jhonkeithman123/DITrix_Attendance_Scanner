@@ -3,9 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/app_notifier.dart';
 import '../services/auth_service.dart';
-import 'signup_screen.dart';
-import 'forgot_password_screen.dart';
-import 'home_screen.dart';
 import 'dart:math' as math;
 import 'dart:io';
 import 'dart:async';
@@ -71,8 +68,7 @@ class _LoginScreenState extends State<LoginScreen> {
         }
 
         if (!mounted) return;
-        Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const HomeScreen()));
+        Navigator.pushNamed(context, '/home');
       }
     } on TimeoutException {
       if (!mounted) return;
@@ -96,8 +92,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (ok) {
         if (!mounted) return;
         AppNotifier.showSnack(context, 'Signed in');
-        Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => const HomeScreen()));
+        Navigator.pushNamed(context, '/home');
       } else {
         if (!mounted) return;
         AppNotifier.showSnack(context, 'Sign in failed');
@@ -117,6 +112,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(title: const Text('Sign in')),
       body: LayoutBuilder(
         builder: (ctx, constraints) {
@@ -187,11 +183,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             onPressed: _loading
                                 ? null
                                 : () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => const SignupScreen(),
-                                      ),
-                                    );
+                                    Navigator.pushNamed(context, '/signup');
                                   },
                             child: const Text('Create account'),
                           ),
@@ -199,12 +191,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             onPressed: _loading
                                 ? null
                                 : () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) =>
-                                            const ForgotPasswordScreen(),
-                                      ),
-                                    );
+                                    Navigator.pushNamed(context, '/about');
                                   },
                             child: const Text('Forgot password?'),
                           ),

@@ -54,7 +54,18 @@ class TokenStorage {
       final f = await _file();
       if (!await f.exists()) return null;
       final txt = await f.readAsString();
-      return Map<String, dynamic>.from(jsonDecode(txt));
+      final obj = Map<String, dynamic>.from(jsonDecode(txt));
+
+      // Debug: will print locally stored token info
+      try {
+        final tokenStr =
+            (obj['token'] is String) ? (obj['token'] as String) : '';
+        final short =
+            tokenStr.length > 12 ? '${tokenStr.substring(0, 12)}...' : tokenStr;
+        final exp = obj['expiresAt'];
+        print('[TokenStorage] readAll token=$short expiresAt=$exp');
+      } catch (_) {}
+      return obj;
     } catch (_) {
       return null;
     }

@@ -10,13 +10,18 @@ import '../services/token_storage.dart';
 class AuthService {
   // BaseUrl via constructor so it's easy to override for emulator / prod
   final String _baseUrl;
+  // ignore: unused_field
+  final String _globalUrl =
+      "https://ditrix-attendance-scanner-server.onrender.com";
+  // ignore: unused_field
+  final String _localUrl = "http://10.0.2.2:5600";
 
   AuthService(
       {String? baseUrl =
           "https://ditrix-attendance-scanner-server.onrender.com"})
       : _baseUrl = baseUrl ??
             // default to local dev IP; for Android emulator use 10.0.2.2'
-            'http://localhost:5600';
+            "http://localhost:5600";
 
   // helper to POST JSON with timeout and clearer errors
   Future<http.Response> _postJson(String path, Map<String, dynamic> body,
@@ -134,6 +139,9 @@ class AuthService {
   /// Returns profile map on success, null otherwise.
   Future<Map<String, dynamic>?> validateSession() async {
     final token = await TokenStorage.getToken();
+    final all = await TokenStorage.readAll();
+    print(
+        '[AuthService] validateSession token(head)=${token != null ? '${token.substring(0, 12)}...' : '(none)'} file=$all');
     if (token == null) return null;
 
     final uri = Uri.parse('$_baseUrl/auth/session');
@@ -142,6 +150,13 @@ class AuthService {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
       }).timeout(const Duration(seconds: 120));
+
+      print('[AuthService] /auth/session status=${resp.statusCode}');
+      if (resp.body.isNotEmpty) {
+        try {
+          print('[AuthService] /auth/session body=${resp.body}');
+        } catch (_) {}
+      }
 
       if (resp.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(resp.body);
@@ -168,31 +183,40 @@ class AuthService {
     final resp =
         await _postJson('/auth/login', {'email': email, 'password': password});
 
-    if (resp.statusCode != 200) {
-      String msg;
-      try {
-        final Map<String, dynamic> body = jsonDecode(resp.body);
-        msg =
-            (body['error'] ?? body['message'] ?? resp.reasonPhrase ?? resp.body)
-                .toString();
-      } catch (_) {
-        msg = resp.body.isNotEmpty
-            ? resp.body
-            : 'Sign in failed (status ${resp.statusCode})';
-      }
-      throw Exception(msg);
-    }
+    _checkServiceUnavailable(resp);
 
-    final Map<String, dynamic> body = jsonDecode(resp.body);
-    final token = body['token']?.toString();
-    if (token == null) throw Exception('Login response missing token');
+    if (resp.statusCode != 200) throw Exception('Login failed: ${resp.body}');
+
+    final Map<String, dynamic> body =
+        jsonDecode(resp.body) as Map<String, dynamic>;
+    final token = body['token'] as String?;
+    final expiresAtStr = body['expiresAt'] as String?;
+    print(
+        '[AuthService] /auth/login returned token(head)=${token != null ? '${token.substring(0, 12)}...' : '(none)'} expiresAt=$expiresAtStr');
+    //* Fix: the logic was inverted
+    if (token != null) {
+      int? expiresMs;
+
+      if (expiresAtStr != null && expiresAtStr.isNotEmpty) {
+        try {
+          expiresMs =
+              DateTime.parse(expiresAtStr).toUtc().millisecondsSinceEpoch;
+        } catch (_) {
+          expiresMs = null;
+        }
+        await TokenStorage.saveToken(token, expiresAtEpochMs: expiresMs);
+      }
+    }
+    // print after save
+    final after = await TokenStorage.readAll();
+    print('[AuthService] token saved -> file=$after');
 
     final profile = (body['profile'] is Map)
         ? Map<String, dynamic>.from(body['profile'])
         : null;
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_token', token);
+    await prefs.setString('auth_token', token!);
     // also save token to file cache used by TokenStorage.getToken()
     await TokenStorage.saveToken(token);
     if (profile != null) {
@@ -372,10 +396,43 @@ class AuthService {
     await prefs.remove('profile_avatar');
   }
 
+  Future<void> logout() async {
+    try {
+      final token = await TokenStorage.getToken();
+      if (token == null) {
+        throw Exception("No token found");
+      }
+      final uri = Uri.parse("$_baseUrl/auth/logout");
+
+      final response = await http.post(uri, headers: {
+        "Authorization": "Bearer $token",
+        "Content-Type": "application/json",
+      }).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode != 200) {
+        throw Exception("Logout failed: ${response.statusCode}");
+      }
+
+      // Clear local token preferences after successful server logout.
+      await TokenStorage.deleteToken();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+    } catch (e) {
+      // Even if the server logout fails, clear local data
+      await TokenStorage.deleteToken();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+      rethrow;
+    }
+  }
+
   /// Ask server to extend the current session expiry.
   /// Returns ISO expiry string on success, null on failure.
   Future<String?> refreshSession() async {
     final token = await TokenStorage.getToken();
+    final all = await TokenStorage.readAll();
+    print(
+        '[AuthService] refreshSession token(head)=${token != null ? '${token.substring(0, 12)}...' : '(none)'} file=$all');
     if (token == null) return null;
     final uri = Uri.parse('$_baseUrl/auth/refresh');
     try {

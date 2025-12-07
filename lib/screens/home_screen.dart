@@ -1,20 +1,16 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:student_id_scanner/screens/login_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'profile_screen.dart';
+import '../models/session.dart';
 import '../services/token_storage.dart';
 import '../services/auth_service.dart';
-import 'about_screen.dart';
-import 'capture_id_screen.dart';
-import '../theme/app_theme.dart';
-import 'settings_screen.dart';
 import '../services/session_store.dart';
-import '../models/session.dart';
 import '../services/version_checker.dart';
+import '../services/shared_capture.dart';
+import '../theme/app_theme.dart';
 import '../utils/app_notifier.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -30,6 +26,12 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   bool _checkingProfile = false;
   bool _savingUploads = false;
+
+  final _sharedService = SharedCaptureService();
+  List<Map<String, dynamic>> _ownedCaptures = [];
+  List<Map<String, dynamic>> _sharedCaptures = [];
+  // ignore: unused_field
+  int _tabIndex = 0;
 
   Uint8List? _profileAvatarBytes;
   String _profileInitial = 'K';
@@ -64,11 +66,12 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _checkingProfile = true);
     SharedPreferences? prefs;
     try {
+      print('[HomeScreen] _onProfileTap start');
       final token = await TokenStorage.getToken();
+      print('[HomeScreen] token present: ${token != null}');
       if (token == null) {
         if (!mounted) return;
-        Navigator.push(
-            context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+        Navigator.pushNamed(context, '/login');
         return;
       }
 
@@ -77,17 +80,22 @@ class _HomeScreenState extends State<HomeScreen> {
       final hasLocalProfile = localName != null && localName.isNotEmpty;
 
       if (hasLocalProfile) {
+        print(
+            '[HomeScreen] using local cached profile, navigating optimistically');
         // optimistic navigation: show profile immediately, validate in background
         if (!mounted) return;
-        Navigator.push(
-            context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
+        Navigator.pushNamed(context, '/profile');
         _validateSessionInBackground();
         return;
       }
 
       // no local profile -> validate first
+      print('[HomeScreen] no local profile, validating session with server');
       final profile = await _auth.validateSession();
+      print('[HomeScreen] validateSession result: ${profile != null}');
       if (profile != null) {
+        print(
+            '[HomeScreen] session valid, saving local profile and navigating');
         // persist profile locally for next time
         await prefs.setString(
             'profile_name', profile['name']?.toString() ?? '');
@@ -98,23 +106,23 @@ class _HomeScreenState extends State<HomeScreen> {
               'profile_avatar', profile['avatar_url'].toString());
         }
         if (!mounted) return;
-        Navigator.push(
-            context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
+        Navigator.pushNamed(context, '/profile');
         return;
       }
 
       // invalid session -> clear token and go to login
+      print(
+          '[HomeScreen] session invalid -> deleting token and navigating to login');
       await TokenStorage.deleteToken();
       if (!mounted) return;
-      Navigator.push(
-          context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+      Navigator.pushNamed(context, '/login');
     } catch (e) {
+      print('[HomeScreen] _onProfileTap error: $e');
       // network/server error: if we had a local profile, still go to ProfileScreen; otherwise show error and stay
       // debugPrint('profile tap check error: $e');
       if (prefs != null && (prefs.getString('profile_name') ?? '').isNotEmpty) {
         if (!mounted) return;
-        Navigator.push(
-            context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
+        Navigator.pushNamed(context, '/profile');
       } else {
         if (!mounted) return;
         AppNotifier.showSnack(
@@ -128,24 +136,25 @@ class _HomeScreenState extends State<HomeScreen> {
   // validate session silently in background; if invalid -> force logout
   Future<void> _validateSessionInBackground() async {
     try {
+      print('[HomeScreen] background session validation start');
       final profile = await _auth.validateSession();
 
       if (profile == null) {
+        print(
+            '[HomeScreen] background validateSession returned null -> trying refresh');
         // token invalid/expired (server explicitly returned 401). Try refresh before forcing logout.
         final newExpiresIso = await _auth.refreshSession();
+        print('[HomeScreen] refreshSession result: $newExpiresIso');
         if (newExpiresIso == null) {
           // refresh failed -> logout
           await TokenStorage.deleteToken();
           if (!mounted) return;
           AppNotifier.showSnack(
               context, 'Session expired — please sign in again');
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const LoginScreen()),
-            (route) => false,
-          );
+          Navigator.pushNamed(context, '/login');
           return;
         }
-
+        print('[HomeScreen] refresh succeeded, persisted new expiry');
         // refresh succeeded: persist new expiry and update local profile by calling validateSession again
         try {
           final token = await TokenStorage.getToken();
@@ -155,12 +164,15 @@ class _HomeScreenState extends State<HomeScreen> {
             await TokenStorage.saveToken(token, expiresAtEpochMs: epochMs);
           }
         } catch (e) {
+          print('[HomeScreen] failed to persist refreshed expiry: $e');
           // debugPrint('failed to persist refreshed expiry: $e');
         }
 
         // attempt to fetch profile again
         try {
           final refreshedProfile = await _auth.validateSession();
+          print(
+              '[HomeScreen] post-refresh validateSession returned: ${refreshedProfile != null}');
           if (refreshedProfile != null) {
             final prefs = await SharedPreferences.getInstance();
             await prefs.setString(
@@ -180,6 +192,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
+      print('[HomeScreen] background validateSession ok, extending session');
       // valid profile returned: update local profile & extend session
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('profile_name', profile['name']?.toString() ?? '');
@@ -191,6 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       final newExpiresIso = await _auth.refreshSession();
+      print('[HomeScreen] refreshSession returned: $newExpiresIso');
       if (newExpiresIso != null) {
         try {
           final dt = DateTime.parse(newExpiresIso).toUtc();
@@ -201,6 +215,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 expiresAtEpochMs: epochMs);
           }
         } catch (e) {
+          print('[HomeScreen] failed to persist refresh expiry: $e');
           // debugPrint('failed to persist refreshed expiry: $e');
         }
       }
@@ -208,6 +223,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) _loadProfileInfo();
       // ignore: unused_catch_clause
     } on Exception catch (e) {
+      print('[HomeScreen] background session validation error (ignored): $e');
       // network/server error — do not log the user out for transient errors.
       // debugPrint('background session validation failed (non-fatal): $e');
     }
@@ -334,23 +350,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _refresh() async {
-    final list = await _store.list();
-
-    if (!mounted) return;
-    setState(() {
-      _sessions = list;
-      _loading = false;
-    });
-  }
-
   Future<void> _startNewSession() async {
     final s = await _store.createNew();
     if (!mounted) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => CaptureIdScreen(sessionId: s.id)),
-    );
+    await Navigator.pushNamed(context, '/capture',
+        arguments: {'sessionId': s.id});
     await _refresh();
   }
 
@@ -395,12 +399,75 @@ class _HomeScreenState extends State<HomeScreen> {
       // optional: refresh local list (in case server returns changed state / you want to mark synced)
       await _refresh();
     } catch (e) {
-      if (mounted) {
-        AppNotifier.showSnack(context, 'Upload failed: ${e.toString()}');
+      if (!mounted) return;
+      final errorMsg = e.toString();
+      // Check if it's a duplicate error (409)
+      if (errorMsg.contains('already been uploaded')) {
+        AppNotifier.showSnack(
+          context,
+          'This capture has already been uploaded. Try a different session.',
+        );
+      } else {
+        AppNotifier.showSnack(context, 'Upload failed: $errorMsg');
       }
     } finally {
       if (mounted) setState(() => _savingUploads = false);
     }
+  }
+
+  Future<void> _refresh() async {
+    final localList = await _store.list();
+
+    // Fetch shared captures if authenticated
+    try {
+      final token = await TokenStorage.getToken();
+      print('[HomeScreen] refresh - token present: ${token != null}');
+      if (token != null) {
+        final result = await _sharedService.listCaptures();
+        print('[HomeScreen] listCaptures result: $result');
+        if (!mounted) return;
+
+        // Safely extract and filter arrays
+        final ownedRaw = result['owned'];
+        final sharedRaw = result['shared'];
+
+        final ownedList = (ownedRaw is List &&
+                ownedRaw.isNotEmpty &&
+                ownedRaw.first is List)
+            ? (ownedRaw.first as List)
+                .whereType<Map<String, dynamic>>()
+                .toList()
+            : (ownedRaw as List?)?.whereType<Map<String, dynamic>>().toList() ??
+                [];
+
+        final sharedList = (sharedRaw is List &&
+                sharedRaw.isNotEmpty &&
+                sharedRaw.first is List)
+            ? (sharedRaw.first as List)
+                .whereType<Map<String, dynamic>>()
+                .toList()
+            : (sharedRaw as List?)
+                    ?.whereType<Map<String, dynamic>>()
+                    .toList() ??
+                [];
+
+        setState(() {
+          _ownedCaptures = ownedList;
+          _sharedCaptures = sharedList;
+          print(
+              '[HomeScreen] owned: ${_ownedCaptures.length}, shared: ${_sharedCaptures.length}');
+        });
+      }
+    } catch (e) {
+      print('[HomeScreen] _refresh error: $e');
+      // Ignore if not authenticated or server error
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _sessions = localList;
+      _loading = false;
+    });
   }
 
   bool _drawerTitleExpanded = false;
@@ -569,10 +636,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: const Icon(Icons.school_outlined),
                 color: Theme.of(context).colorScheme.onPrimary,
                 onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const TutorialScreen()),
-                  );
+                  Navigator.pushNamed(context, '/tutorial');
                 },
               ),
 
@@ -592,10 +656,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 onSelected: (value) async {
                   switch (value) {
                     case 'settings':
-                      Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const SettingsScreen()));
+                      Navigator.pushNamed(context, '/settings');
                       break;
                   }
                 },
@@ -661,11 +722,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       icon: const Icon(Icons.settings),
                       onPressed: () {
                         Navigator.pop(context);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const SettingsScreen()),
-                        );
+                        Navigator.pushNamed(context, '/settings');
                       },
                     ),
                   ],
@@ -729,101 +786,387 @@ class _HomeScreenState extends State<HomeScreen> {
                 title: Text('About', style: TextStyle(color: onSurface)),
                 onTap: () {
                   Navigator.pop(context);
-                  Navigator.push(context,
-                      MaterialPageRoute(builder: (_) => const AboutScreen()));
+                  Navigator.pushNamed(context, '/about');
                 },
               ),
             ],
           ),
         ),
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : (_sessions.isEmpty
-                ? ListView(
-                    children: const [
-                      SizedBox(height: 80),
-                      Center(
-                          child: Text(
-                              'No sessions yet. Start a new capture session.')),
-                    ],
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _sessions.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (_, i) {
-                      final s = _sessions[i];
-                      String fmtTime(String hhmm) => hhmm;
-                      final subtitle =
-                          '${s.subject.isEmpty ? 'Untitled' : s.subject} • In: ${fmtTime(s.startTime)} • Dismiss: ${fmtTime(s.endTime)}';
-                      return ListTile(
-                        tileColor: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest
-                            .withValues(alpha: 0.3),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
-                        title: Text(
-                          s.subject.isEmpty ? 'Session ${s.id}' : s.subject,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(subtitle),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
+      body: DefaultTabController(
+          length: 3,
+          child: Column(
+            children: [
+              TabBar(
+                onTap: (index) => setState(() => _tabIndex = index),
+                tabs: const [
+                  Tab(text: 'Local', icon: Icon(Icons.phone_android)),
+                  Tab(text: 'My Shared', icon: Icon(Icons.cloud)),
+                  Tab(text: 'Joined', icon: Icon(Icons.group)),
+                ],
+              ),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _refresh,
+                  child: _loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : TabBarView(
                           children: [
-                            IconButton(
-                              icon: const Icon(Icons.delete_outline),
-                              tooltip: 'Delete session',
-                              onPressed: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    title: const Text('Delete session'),
-                                    content: const Text(
-                                        'Are you sure you want to delete this session? This action cannot be undone.'),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(ctx).pop(false),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(ctx).pop(true),
-                                        child: const Text('Delete'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                                if (confirm == true) {
-                                  await _deleteSession(s.id);
-                                }
-                              },
-                            ),
-                            const Icon(Icons.chevron_right),
+                            _buildLocalList(),
+                            _buildOwnedList(),
+                            _buildSharedList(),
                           ],
                         ),
-                        onTap: () async {
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) =>
-                                    CaptureIdScreen(sessionId: s.id)),
-                          );
-                          await _refresh();
-                        },
-                      );
-                    },
-                  )),
-      ),
+                ),
+              ),
+            ],
+          )),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _startNewSession,
         label: const Text('Capture ID'),
       ),
     );
+  }
+
+  Widget _buildLocalList() {
+    if (_sessions.isEmpty) {
+      return ListView(
+        children: const [
+          SizedBox(height: 80),
+          Center(child: Text('No local sessions yet')),
+        ],
+      );
+    }
+
+    return ListView.separated(
+        padding: const EdgeInsets.all(16),
+        itemCount: _sessions.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 10),
+        itemBuilder: (_, i) {
+          final s = _sessions[i];
+          final subtitle =
+              '${s.subject.isEmpty ? 'Untitled' : s.subject} • ${s.startTime} - ${s.endTime}';
+
+          return ListTile(
+            tileColor: Theme.of(context)
+                .colorScheme
+                .surfaceContainerHighest
+                .withValues(alpha: 0.3),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            title: Text(s.subject.isEmpty ? 'Session ${s.id}' : s.subject),
+            subtitle: Text(subtitle),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.cloud_upload),
+                  tooltip: 'Upload to cloud',
+                  onPressed: () => _uploadSingleSession(s),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  tooltip: 'Delete',
+                  onPressed: () => _confirmDeleteLocal(s.id),
+                ),
+                const Icon(Icons.chevron_right),
+              ],
+            ),
+            onTap: () async {
+              await Navigator.pushNamed(context, '/capture',
+                  arguments: {'sessionId': s.id});
+              await _refresh();
+            },
+          );
+        });
+  }
+
+  Widget _buildOwnedList() {
+    if (_ownedCaptures.isEmpty) {
+      return ListView(
+        children: const [
+          SizedBox(height: 80),
+          Center(child: Text('No cloud sessions yet. Upload a local session.')),
+        ],
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: _ownedCaptures.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (_, i) {
+        final c = _ownedCaptures[i];
+
+        // Safely extract fields
+        final captureId = c['id']?.toString();
+        if (captureId == null || captureId.isEmpty) {
+          return const SizedBox.shrink(); // skip invalid item
+        }
+        final subject = (c['subject'] as String?)?.trim();
+        final title = (subject != null && subject.isNotEmpty)
+            ? subject
+            : 'Session $captureId';
+        final shareCode = (c['share_code'] as String?) ?? '';
+
+        return ListTile(
+          tileColor: Theme.of(context)
+              .colorScheme
+              .primaryContainer
+              .withValues(alpha: 0.3),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          title: Text(title),
+          subtitle: Text(
+            shareCode.isNotEmpty ? 'Code: $shareCode' : 'No share code',
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.share),
+                tooltip: 'Share',
+                onPressed: () => _showShareDialog(c),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline),
+                tooltip: 'Delete',
+                onPressed: () => _confirmDeleteShared(captureId),
+              ),
+              const Icon(Icons.chevron_right),
+            ],
+          ),
+          onTap: () => Navigator.pushNamed(
+            context,
+            '/shared-capture',
+            arguments: {'captureId': captureId},
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSharedList() {
+    if (_sharedCaptures.isEmpty) {
+      return ListView(
+        children: [
+          const SizedBox(height: 80),
+          const Center(child: Text('No shared sessions. Join with a code.')),
+          const SizedBox(height: 16),
+          Center(
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.add),
+              label: const Text('Join Session'),
+              onPressed: _showJoinDialog,
+            ),
+          ),
+        ],
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: _sharedCaptures.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (_, i) {
+        final c = _sharedCaptures[i];
+        final subject = c['subject'] ?? 'Untitled';
+        final ownerName = c['owner_name'] ?? 'Unknown';
+        return ListTile(
+          tileColor: Theme.of(context)
+              .colorScheme
+              .secondaryContainer
+              .withValues(alpha: 0.3),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          title: Text(subject),
+          subtitle: Text('Owner: $ownerName'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _openSharedCapture(c['id']),
+        );
+      },
+    );
+  }
+
+  Future<void> _uploadSingleSession(Session s) async {
+    try {
+      final roster = s.roster
+          .map((r) => {
+                'id': r['id'],
+                'name': r['name'],
+                'present': r['present'] ?? false,
+                'time': r['time'],
+                'status': r['status'],
+              })
+          .toList();
+
+      final result = await _sharedService.createCapture(
+        id: s.id,
+        subject: s.subject,
+        date: s.date,
+        startTime: s.startTime,
+        endTime: s.endTime,
+        roster: roster,
+      );
+
+      if (!mounted) return;
+      AppNotifier.showSnack(
+          context, 'Uploaded: ${result['capture']['share_code']}');
+      await _refresh(); // This calls _refresh() which should populate _ownedCaptures
+    } catch (e) {
+      if (!mounted) return;
+      final errorMsg = e.toString();
+      // Check if it's a duplicate error (409)
+      if (errorMsg.contains('already been uploaded')) {
+        AppNotifier.showSnack(
+          context,
+          'This capture has already been uploaded. Try a different session.',
+        );
+      } else {
+        AppNotifier.showSnack(context, 'Upload failed: $errorMsg');
+      }
+    }
+  }
+
+  Future<void> _confirmDeleteLocal(String id) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete local session'),
+        content: const Text('This will only delete the local copy.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await _deleteSession(id);
+    }
+  }
+
+  Future<void> _confirmDeleteShared(String id) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete shared session'),
+        content: const Text('This will delete for all collaborators.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      try {
+        await _sharedService.deleteCapture(id);
+        if (!mounted) return;
+        AppNotifier.showSnack(context, 'Deleted');
+        await _refresh();
+      } catch (e) {
+        if (!mounted) return;
+        AppNotifier.showSnack(context, 'Delete failed: $e');
+      }
+    }
+  }
+
+  Future<void> _showShareDialog(Map<String, dynamic> capture) async {
+    final emailCtl = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Share Session'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Share Code: ${capture['share_code']}'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: emailCtl,
+              decoration:
+                  const InputDecoration(labelText: 'Collaborator Email'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          ElevatedButton(
+            onPressed: () async {
+              try {
+                await _sharedService.addCollaborator(
+                    capture['id'], emailCtl.text.trim());
+                if (!ctx.mounted) return;
+                Navigator.pop(ctx);
+                if (!mounted) return;
+                AppNotifier.showSnack(context, 'Collaborator added');
+              } catch (e) {
+                if (!mounted) return;
+                AppNotifier.showSnack(context, 'Failed: $e');
+              }
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showJoinDialog() async {
+    final codeCtl = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Join Session'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Ask the owner for the share code'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: codeCtl,
+              decoration: const InputDecoration(
+                labelText: 'Share Code',
+                hintText: 'e.g., ABC12345',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              try {
+                await _sharedService
+                    .joinByCode(codeCtl.text.trim().toUpperCase());
+                if (!ctx.mounted) return;
+                Navigator.pop(ctx);
+                if (!mounted) return;
+                AppNotifier.showSnack(context, 'Joined successfully');
+                await _refresh();
+              } catch (e) {
+                if (!mounted) return;
+                AppNotifier.showSnack(context, 'Failed: $e');
+              }
+            },
+            child: const Text('Join'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openSharedCapture(String id) {
+    // Navigate to a read-only or editable view depending on role
+    Navigator.pushNamed(context, '/shared-capture',
+        arguments: {'captureId': id});
   }
 }
 

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../utils/app_notifier.dart';
-import 'reset_password_screen.dart';
 import 'dart:math' as math;
 
 class ForgotPasswordScreen extends StatefulWidget {
@@ -46,8 +45,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       // navigate to reset screen (user will enter code + new password)
       if (mounted) {
         AppNotifier.showSnack(context, msg);
-        Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => ResetPasswordScreen(email: _emailCtl.text.trim())));
+        Navigator.pushNamed(context, '/reset',
+            arguments: {'email': _emailCtl.text.trim()});
       }
     } catch (e) {
       if (!mounted) return;
@@ -61,6 +60,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(title: const Text('Forgot password')),
       body: LayoutBuilder(builder: (ctx, constraints) {
         final maxWidth = math.min(520.0, constraints.maxWidth * 0.95);

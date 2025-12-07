@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_notifier.dart';
 import '../services/auth_service.dart';
-import 'login_screen.dart';
 import 'dart:math' as math;
-import 'verify_email_screen.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -71,15 +69,11 @@ class _SignupScreenState extends State<SignupScreen> {
               ? 'Account created but failed to send verification email.'
               : 'Verification code sent to your email';
           AppNotifier.showSnack(context, friendly);
-          Navigator.of(context).pushReplacement(MaterialPageRoute(
-              builder: (_) => VerifyEmailScreen(
-                    email: _emailCtl.text.trim(),
-                    notice: friendly,
-                  )));
+          Navigator.pushNamed(context, '/verify',
+              arguments: {'email': _emailCtl.text.trim(), 'notice': friendly});
         } else {
           AppNotifier.showSnack(context, 'Account created. Please sign in.');
-          Navigator.of(context).pushReplacement(
-              MaterialPageRoute(builder: (_) => const LoginScreen()));
+          Navigator.pushReplacementNamed(context, '/login');
         }
       } else {
         if (!mounted) return;
@@ -155,6 +149,7 @@ class _SignupScreenState extends State<SignupScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       resizeToAvoidBottomInset: true,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: const Text('Create account'),
         flexibleSpace: Container(
@@ -282,9 +277,8 @@ class _SignupScreenState extends State<SignupScreen> {
                           onPressed: _loading
                               ? null
                               : () {
-                                  Navigator.of(context).pushReplacement(
-                                      MaterialPageRoute(
-                                          builder: (_) => const LoginScreen()));
+                                  Navigator.pushReplacementNamed(
+                                      context, '/login');
                                 },
                           child: const Text('Sign in'),
                         ),

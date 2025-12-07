@@ -1,9 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:student_id_scanner/screens/shared_capture_screen.dart';
 
 import 'screens/home_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/signup_screen.dart';
+import 'screens/forgot_password_screen.dart';
+import 'screens/profile_screen.dart';
+import 'screens/capture_id_screen.dart';
+import 'screens/about_screen.dart';
+import 'screens/verify_email_screen.dart';
+import 'screens/reset_password_screen.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {
@@ -66,9 +75,54 @@ class StudentIdScannerApp extends StatelessWidget {
           child: child ?? const SizedBox.shrink(),
         ),
         routes: {
+          '/home': (_) => const HomeScreen(),
           '/settings': (_) => const SettingsScreen(),
+          '/login': (_) => const LoginScreen(),
+          '/signup': (_) => const SignupScreen(),
+          '/forgot': (_) => const ForgotPasswordScreen(),
+          '/profile': (_) => const ProfileScreen(),
+          '/about': (_) => const AboutScreen(),
+          '/onboarding': (_) => const OnboardingScreen(),
+          '/tutorial': (_) => const TutorialScreen(),
         },
-        home: showOnboarding ? const OnboardingScreen() : const HomeScreen(),
+        onGenerateRoute: (settings) {
+          // Handle routes with parameters
+          if (settings.name == '/capture') {
+            final args = settings.arguments as Map<String, dynamic>?;
+            final sessionId = args?['sessionId'] as String? ?? '';
+            return MaterialPageRoute(
+              builder: (_) => CaptureIdScreen(sessionId: sessionId),
+              settings: settings,
+            );
+          }
+          if (settings.name == '/verify') {
+            final args = settings.arguments as Map<String, dynamic>?;
+            final email = args?['email'] as String? ?? '';
+            final notice = args?['notice'];
+            return MaterialPageRoute(
+              builder: (_) => VerifyEmailScreen(email: email, notice: notice),
+              settings: settings,
+            );
+          }
+          if (settings.name == '/reset') {
+            final args = settings.arguments as Map<String, dynamic>?;
+            final email = args?['email'] as String? ?? '';
+            return MaterialPageRoute(
+              builder: (_) => ResetPasswordScreen(email: email),
+              settings: settings,
+            );
+          }
+          if (settings.name == '/shared-capture') {
+            final args = settings.arguments as Map<String, dynamic>?;
+            final captureId = args?['captureId'] as String? ?? '';
+            return MaterialPageRoute(
+              builder: (_) => SharedCaptureScreen(captureId: captureId),
+              settings: settings,
+            );
+          }
+          return null;
+        },
+        initialRoute: showOnboarding ? '/onboarding' : '/home',
       ),
     );
   }

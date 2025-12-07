@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../utils/app_notifier.dart';
-import 'login_screen.dart';
 import 'dart:math' as math;
 
 class ResetPasswordScreen extends StatefulWidget {
@@ -64,8 +63,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       if (!mounted) return;
       AppNotifier.showSnack(context, 'Password reset. Please sign in.');
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const LoginScreen()));
+      Navigator.pushReplacementNamed(context, '/login');
     } catch (e) {
       final msg = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
       AppNotifier.showSnack(context, msg);
@@ -77,6 +75,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(title: const Text('Reset password')),
       body: LayoutBuilder(builder: (ctx, constraints) {
         final maxWidth = math.min(520.0, constraints.maxWidth * 0.95);

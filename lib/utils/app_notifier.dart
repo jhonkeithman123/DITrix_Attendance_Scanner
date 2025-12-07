@@ -60,4 +60,25 @@ class AppNotifier {
       ),
     );
   }
+
+  /// Show a loading dialog with spinner. Cal Navigator.pop(context) to dismiss.
+  static void showLoading(
+    BuildContext context, {
+    String message = 'Loading...',
+    bool barierDismissable = false,
+  }) {
+    showDialog<void>(
+        context: context,
+        barrierDismissible: barierDismissable,
+        builder: (ctx) => AlertDialog(
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(message),
+                ],
+              ),
+            ));
+  }
 }

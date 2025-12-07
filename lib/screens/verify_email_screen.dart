@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../utils/app_notifier.dart';
 import '../services/auth_service.dart';
-import 'login_screen.dart';
 
 class VerifyEmailScreen extends StatefulWidget {
   final String email;
@@ -58,8 +57,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
         if (!mounted) return;
         AppNotifier.showSnack(context, 'Email verified. Please sign in.');
         if (!mounted) return;
-        Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const LoginScreen()));
+        Navigator.pushReplacementNamed(context, '/login');
       } else {
         if (!mounted) return;
         AppNotifier.showSnack(context, 'Verification failed');
@@ -78,6 +76,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
     setState(() => _loading = true);
     try {
       await _auth.resendVerification(email: widget.email);
+      if (!mounted) return;
       AppNotifier.showSnack(context, 'Verification code resent');
       _startCooldown(60);
     } catch (e) {
@@ -128,6 +127,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: const Text('Verify email'),
       ),
@@ -212,8 +212,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
                 const SizedBox(height: 8),
                 TextButton(
                   onPressed: () {
-                    Navigator.of(context).pushReplacement(
-                        MaterialPageRoute(builder: (_) => const LoginScreen()));
+                    Navigator.pushReplacementNamed(context, '/login');
                   },
                   child: const Text('Back to Sign in'),
                 ),
