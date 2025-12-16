@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "366991659582",
+    "project_id": "ditrix-c7ca0",
+    "storage_bucket": "ditrix-c7ca0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:366991659582:android:d6f9c39a7f54ccc892776f",
+        "android_client_info": {
+          "package_name": "com.ditrix.attendance"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCaSMzqxYfjgNLwkEoYSZsQHcLW66Csxd0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

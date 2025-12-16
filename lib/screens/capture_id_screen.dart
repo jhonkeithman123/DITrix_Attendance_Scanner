@@ -940,6 +940,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
             await _saveSession();
             return;
           }
+          if (!mounted) return;
           final add = await showDialog<bool>(
             context: context,
             builder: (ctx) => AlertDialog(
@@ -1041,8 +1042,9 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
       );
     } catch (e) {
       _log('Gallery pick error: $e');
-      if (mounted)
+      if (mounted) {
         AppNotifier.showSnack(context, 'Failed to process selected image: $e');
+      }
     }
   }
 
@@ -1310,6 +1312,49 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     }
   }
 
+  Future<void> _loadPrompt() async {
+    final choice = await showDialog<String>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+              title: const Text('Load Format'),
+              children: [
+                SimpleDialogOption(
+                  onPressed: () => Navigator.of(ctx).pop('csv'),
+                  child: const Text('Load CSV (no column width)'),
+                ),
+                SimpleDialogOption(
+                  onPressed: () => Navigator.of(ctx).pop('xlsx'),
+                  child: const Text('Load XLSX (preserve widths & wrap)'),
+                ),
+                SimpleDialogOption(
+                  onPressed: () => Navigator.of(ctx).pop('docx'),
+                  child: const Text('Load DOCX (Word Document File)'),
+                ),
+                SimpleDialogOption(
+                  onPressed: () => Navigator.of(ctx).pop('pdf'),
+                  child: const Text('Load PDF (Portable Document Format)'),
+                ),
+                SimpleDialogOption(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            ));
+
+    if (choice == 'csv') {
+      await _loadMasterlistCsv();
+    }
+    if (choice == 'xlxs') {
+      await _loadMasterlistXlsx();
+    }
+    if (choice == 'docx') {
+      await _loadMasterlistDocx();
+    }
+    if (choice == 'pdf') {
+      await _loadMasterlistPDF();
+    }
+  }
+
   Future<void> _searchStudentPrompt() async {
     final qCtl = TextEditingController();
 
@@ -1469,17 +1514,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                 case 'toggleCam':
                   await _toggleCamera();
                   break;
-                case 'loadCsv':
-                  await _loadMasterlistCsv();
-                  break;
-                case 'loadXlsx':
-                  await _loadMasterlistXlsx();
-                  break;
-                case 'loadDocx':
-                  await _loadMasterlistDocx();
-                  break;
-                case 'loadPDF':
-                  await _loadMasterlistPDF();
+                case 'load':
+                  await _loadPrompt();
                   break;
                 case 'export':
                   await _exportPrompt();
@@ -1505,20 +1541,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                     Text(_cameraEnabled ? 'Disable camera' : 'Enable camera'),
               ),
               const PopupMenuItem(
-                value: 'loadCsv',
-                child: Text('Load masterlist (CSV)'),
-              ),
-              const PopupMenuItem(
-                value: 'loadXlsx',
-                child: Text('Load masterlist (XLSX)'),
-              ),
-              const PopupMenuItem(
-                value: 'loadDocx',
-                child: Text('Load masterlist (DOCX)'),
-              ),
-              const PopupMenuItem(
-                value: 'loadPDF',
-                child: Text('Load masterlist (PDF)'),
+                value: 'load',
+                child: Text('Load attendance'),
               ),
               const PopupMenuItem(
                 value: 'export',
