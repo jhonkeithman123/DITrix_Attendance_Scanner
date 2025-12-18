@@ -287,21 +287,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => _loading = true);
 
     try {
-      // first try server update
+      // Try server update, but don't block local save if it fails
       try {
         await _auth.updateProfile(
-            name: _nameCtl.text.trim(), avatarBase64: _avatarBase64);
+          name: _nameCtl.text.trim(),
+          avatarBase64: _avatarBase64,
+        );
       } catch (e) {
+        // Optional: log error, but do not rethrow
         // debugPrint('profile server update failed: $e');
-        // fail early if you want strict behavior; here we continue and still save locally
-        throw Exception('Server update failed');
       }
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('profile_name', _nameCtl.text.trim());
 
       if (_avatarBase64 != null) {
-        // ensure stored avatar is a data: URI (if caller passed raw base64, prefix it)
+        // ensure stored avatar is a data: URI
         final toStore = _avatarBase64!.startsWith('data:')
             ? _avatarBase64!
             : 'data:image/jpeg;base64,${_avatarBase64!}';

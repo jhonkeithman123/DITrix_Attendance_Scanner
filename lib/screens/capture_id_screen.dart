@@ -55,6 +55,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     with WidgetsBindingObserver {
   final _sessionStore = SessionStore();
   Session? _session;
+  bool _didDeduplicate = false;
   bool _cameraInitError = false;
   String? _cameraErrorMsg;
 
@@ -367,51 +368,77 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   Future<void> _loadSession() async {
     final s = await _sessionStore.load(widget.sessionId);
     if (!mounted) return;
-    setState(() {
-      _session = s ?? Session(id: widget.sessionId, createdAt: DateTime.now());
-      // subject: prefer persisted session, otherwise use initialSubject if provided
-      subject = (s != null)
-          ? _session!.subject
-          : (widget.initialSubject?.toString() ?? _session!.subject);
-      // roster: prefer persisted session, otherwise use initialRoster if provided
-      roster = (s != null)
-          ? List<Map<String, dynamic>>.from(_session!.roster)
-          : (widget.initialRoster != null
-              ? List<Map<String, dynamic>>.from(widget.initialRoster!)
-              : []);
-      // Parse "HH:mm"
-      TimeOfDay parse(String hhmm) {
-        if (hhmm.isEmpty || !hhmm.contains(':')) {
-          return const TimeOfDay(hour: 0, minute: 0);
-        }
-        final parts = hhmm.split(':');
-        return TimeOfDay(
-            hour: int.tryParse(parts[0]) ?? 0,
-            minute: int.tryParse(parts[1]) ?? 0);
-      }
+    final hasInitialRoster =
+        widget.initialRoster != null && (widget.initialRoster!.isNotEmpty);
+    _session = s ?? Session(id: widget.sessionId, createdAt: DateTime.now());
 
-      // start/end: prefer persisted session; if not present use the provided initial strings
-      classStartTime = (s != null)
-          ? parse(_session!.startTime)
-          : (widget.initialStartTime != null
-              ? parse(widget.initialStartTime!)
-              : parse(_session!.startTime));
-      classEndTime = (s != null)
-          ? parse(_session!.endTime)
-          : (widget.initialEndTime != null
-              ? parse(widget.initialEndTime!)
-              : parse(_session!.endTime));
-    });
+    // Subject: prefer persisted session; otherwise use initialSubject if provided
+    subject = (s != null)
+        ? _session!.subject
+        : (widget.initialSubject?.toString() ?? _session!.subject);
+
+    // Roster: if initialRoster is provided (shared capture), ALWAYS prefer it
+    // so the shared roster (names + ids) is carried over correctly.
+    if (hasInitialRoster) {
+      roster = List<Map<String, dynamic>>.from(widget.initialRoster!);
+    } else if (s != null) {
+      roster = List<Map<String, dynamic>>.from(_session!.roster);
+    } else {
+      roster = [];
+    }
+
+    roster.sort((a, b) => ((a['name'] ?? '') as String)
+        .toLowerCase()
+        .compareTo(((b['name'] ?? '') as String).toLowerCase()));
+
+    // Parse "HH:mm"
+    TimeOfDay parse(String hhmm) {
+      if (hhmm.isEmpty || !hhmm.contains(':')) {
+        return const TimeOfDay(hour: 0, minute: 0);
+      }
+      final parts = hhmm.split(':');
+      return TimeOfDay(
+          hour: int.tryParse(parts[0]) ?? 0,
+          minute: int.tryParse(parts[1]) ?? 0);
+    }
+
+    // start/end: prefer persisted session; if not present use the provided initial strings
+    classStartTime = (s != null)
+        ? parse(_session!.startTime)
+        : (widget.initialStartTime != null
+            ? parse(widget.initialStartTime!)
+            : parse(_session!.startTime));
+    classEndTime = (s != null)
+        ? parse(_session!.endTime)
+        : (widget.initialEndTime != null
+            ? parse(widget.initialEndTime!)
+            : parse(_session!.endTime));
+
+    // if opened from a shared capture (initial data present), remove any
+    // *other* local sessions witht he same subject + time so we don't
+    // end up with duplicates
+    if ((widget.initialRoster != null ||
+            widget.initialSubject != null ||
+            widget.initialStartTime != null ||
+            widget.initialEndTime != null) &&
+        !_didDeduplicate) {
+      _didDeduplicate = true;
+      try {
+        await _dedupeOtherSessions();
+      } catch (e) {
+        _log('dedupeOtherSessions error: $e');
+      }
+    }
+
+    setState(() {});
   }
 
   Future<void> _saveSession() async {
     if (_session == null) return;
-    String toHHMM(TimeOfDay t) =>
-        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
     _session!
       ..subject = subject
-      ..startTime = toHHMM(classStartTime)
-      ..endTime = toHHMM(classEndTime)
+      ..startTime = _toHHMM(classStartTime)
+      ..endTime = _toHHMM(classEndTime)
       ..roster = roster;
     await _sessionStore.save(_session!);
     _log('[SESSION] saved ${_session!.id}');
@@ -419,6 +446,60 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     try {
       widget.onRosterChanged?.call(roster);
     } catch (_) {}
+  }
+
+  // Format TimeOfDay as "HH:mm"
+  String _toHHMM(TimeOfDay t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+  ///* Check if another session (different id) already uses the same
+  ///* subject + start + end times.
+  Future<bool> _hasDuplicateSession(
+      String newSubject, TimeOfDay start, TimeOfDay end) async {
+    final currentId = _session?.id;
+    final keySubject = newSubject.trim().toLowerCase();
+    final keyStart = _toHHMM(start);
+    final keyEnd = _toHHMM(end);
+
+    final all = await _sessionStore.list();
+    for (final s in all) {
+      if (currentId != null && s.id == currentId) continue;
+      final sSubject = (s.subject).trim().toLowerCase();
+      if (sSubject == keySubject &&
+          s.startTime == keyStart &&
+          s.endTime == keyEnd) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  ///* When opened from a shared cpature, remove any *other* sessions
+  ///* that have the same subject + start + end time so only this one
+  ///* remains.
+  Future<void> _dedupeOtherSessions() async {
+    if (_session == null) return;
+    final currentId = _session!.id;
+    final keySubject = subject.trim().toLowerCase();
+    final keyStart = _toHHMM(classStartTime);
+    final keyEnd = _toHHMM(classEndTime);
+
+    final all = await _sessionStore.list();
+    for (final s in all) {
+      if (s.id == currentId) continue;
+      final sSubject = (s.subject).trim().toLowerCase();
+      if (sSubject == keySubject &&
+          s.startTime == keyStart &&
+          s.endTime == keyEnd) {
+        try {
+          await _sessionStore.delete(s.id);
+          _log(
+              'Deleted duplicate local session ${s.id} ($sSubject $keyStart-$keyEnd)');
+        } catch (e) {
+          _log('Failed to delete duplicate session ${s.id}: $e');
+        }
+      }
+    }
   }
 
   Future<void> _promptSubjectAndTime() async {
@@ -503,8 +584,19 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
           ),
           ElevatedButton(
             onPressed: () async {
+              final newSubject = subjectCtrl.text.trim();
+              // Prevent creating another session with same subject + time
+              final dup =
+                  await _hasDuplicateSession(newSubject, tempStart, tempEnd);
+
+              if (dup) {
+                if (!mounted) return;
+                AppNotifier.showSnack(context,
+                    'A session with the same subject and time already exists.');
+                return;
+              }
               setState(() {
-                subject = subjectCtrl.text.trim();
+                subject = newSubject;
                 classStartTime = tempStart;
                 classEndTime = tempEnd;
                 _developerMode = devTemp;
@@ -543,6 +635,10 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
               })
           .toList();
     });
+    roster.sort((a, b) => ((a['name'] ?? '') as String)
+        .toLowerCase()
+        .compareTo(((b['name'] ?? '') as String).toLowerCase()));
+
     await _saveSession();
     if (!mounted) return;
     AppNotifier.showSnack(context, 'Loaded ${roster.length} students');
@@ -552,6 +648,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   Future<void> _loadMasterlistCsv() async {
     try {
       final parsed = await FileIOService.pickMasterlistCsv();
+      // If user backed out or nothing was parsed, just return silently
+      if (parsed.isEmpty) return;
       await _applyParsedMasterlist(parsed);
     } catch (e) {
       if (!mounted) return;
@@ -563,6 +661,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   Future<void> _loadMasterlistXlsx() async {
     try {
       final parsed = await FileIOService.pickMasterlistXlsx();
+      // If user backed out or nothing was parsed, just return silently
+      if (parsed.isEmpty) return;
       await _applyParsedMasterlist(parsed);
     } catch (e) {
       if (!mounted) return;
@@ -574,6 +674,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   Future<void> _loadMasterlistDocx() async {
     // try {
     //   final parsed = await FileIOService.pickMasterlistDocx();
+    // If user backed out or nothing was parsed, just return silently
+    // if (parsed.isEmpty) return;
     //   await _applyParsedMasterlist(parsed);
     // } catch (e) {
     //   if (!mounted) return;
@@ -589,6 +691,8 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
   Future<void> _loadMasterlistPDF() async {
     // try {
     //   final parsed = await FileIOService.pickMasterlistPdf();
+    // If user backed out or nothing was parsed, just return silently
+    // if (parsed.isEmpty) return;
     //   await _applyParsedMasterlist(parsed);
     // } catch (e) {
     //   if (!mounted) return;
@@ -1344,7 +1448,7 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     if (choice == 'csv') {
       await _loadMasterlistCsv();
     }
-    if (choice == 'xlxs') {
+    if (choice == 'xlsx') {
       await _loadMasterlistXlsx();
     }
     if (choice == 'docx') {
@@ -1353,6 +1457,126 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
     if (choice == 'pdf') {
       await _loadMasterlistPDF();
     }
+  }
+
+  Future<void> _editStudentAt(int index) async {
+    if (!widget.allowEditMetadata) {
+      AppNotifier.showSnack(
+          context, 'Only owner or co-owner may edit the roster');
+      return;
+    }
+    if (index < 0 || index >= roster.length) return;
+
+    final current = roster[index];
+    final idCtl = TextEditingController(text: (current['id'] ?? '').toString());
+    final nameCtl =
+        TextEditingController(text: (current['name'] ?? '').toString());
+
+    await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: const Text('Edit student'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: idCtl,
+                    decoration: const InputDecoration(
+                        labelText: 'Student ID (optional if unknown)'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: nameCtl,
+                    decoration: const InputDecoration(
+                        labelText: 'Full name (required)'),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('Cancel')),
+                ElevatedButton(
+                    onPressed: () async {
+                      final newId = idCtl.text.trim();
+                      final newName = nameCtl.text.trim();
+                      if (newName.isEmpty) {
+                        if (!mounted) return;
+                        AppNotifier.showSnack(context, 'Name is required');
+                        return;
+                      }
+
+                      // if ID is non-empty, enforce uniqueness vs other rows
+                      if (newId.isNotEmpty) {
+                        final normalizerNew = _normalizeId(newId);
+                        final existsOther = roster.asMap().entries.any((e) {
+                          if (e.key == index) return false;
+                          return _normalizeId(
+                                  (e.value['id'] ?? '').toString()) ==
+                              normalizerNew;
+                        });
+                        if (existsOther) {
+                          if (!mounted) return;
+                          AppNotifier.showSnack(
+                              context, 'Another student uses this ID');
+                          return;
+                        }
+                      }
+
+                      setState(() {
+                        roster[index]['id'] = newId;
+                        roster[index]['name'] = newName;
+                        roster.sort((a, b) => ((a['name'] ?? '') as String)
+                            .toLowerCase()
+                            .compareTo(
+                                ((b['name'] ?? '') as String).toLowerCase()));
+                      });
+                      await _saveSession();
+                      if (!ctx.mounted) return;
+                      Navigator.of(ctx).pop();
+                    },
+                    child: const Text('Save')),
+              ],
+            ));
+  }
+
+  Future<void> _removeStudentAt(int index) async {
+    if (!widget.allowEditMetadata) {
+      // viewers on shared captures cannot remove
+      AppNotifier.showSnack(
+          context, 'Only onwer or co-owner may remove students');
+      return;
+    }
+    if (index < 0 || index >= roster.length) return;
+
+    final name = (roster[index]['name'] ?? '').toString();
+    final id = (roster[index]['id'] ?? '').toString();
+
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: const Text('Remove student'),
+              content: Text(
+                  'Remove "$name" (ID: $id) from this class roster?\n\nThis cannot be undone.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    child: const Text('Remove')),
+              ],
+            ));
+
+    if (confirmed != true) return;
+
+    setState(() {
+      roster.removeAt(index);
+    });
+    await _saveSession();
+    if (!mounted) return;
+    AppNotifier.showSnack(context, 'Student removed from roster');
   }
 
   Future<void> _searchStudentPrompt() async {
@@ -1479,7 +1703,14 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                           'time': null,
                           'status': null,
                         });
+                        roster.sort((a, b) => ((a['name'] ?? '') as String)
+                            .toLowerCase()
+                            .compareTo(
+                                ((b['name'] ?? '') as String).toLowerCase()));
                       });
+                      await _saveSession();
+                      if (!ctx.mounted) return;
+                      Navigator.of(ctx).pop();
                     },
                     child: const Text('Add')),
               ],
@@ -1833,102 +2064,125 @@ class _CaptureIdScreenState extends State<CaptureIdScreen>
                         return Card(
                           elevation: 0,
                           margin: const EdgeInsets.symmetric(vertical: 6),
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Row(
-                              children: [
-                                CircleAvatar(
-                                  radius: 20,
-                                  child: Text(initials()),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              name,
-                                              style: const TextStyle(
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Container(
-                                            decoration: BoxDecoration(
-                                              color: chipColor.withValues(
-                                                  alpha: 0.15),
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 10, vertical: 4),
-                                            child: Text(
-                                              status,
-                                              style: TextStyle(
-                                                color: chipColor,
-                                                fontWeight: FontWeight.w600,
-                                                fontSize: 12,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Row(
-                                        children: [
-                                          Icon(Icons.badge,
-                                              size: 16,
-                                              color:
-                                                  Theme.of(context).hintColor),
-                                          const SizedBox(width: 6),
-                                          Expanded(
-                                              child: Text(id,
-                                                  style: TextStyle(
-                                                      color: Theme.of(context)
-                                                          .hintColor))),
-                                          const SizedBox(width: 12),
-                                          Icon(Icons.access_time,
-                                              size: 16,
-                                              color:
-                                                  Theme.of(context).hintColor),
-                                          const SizedBox(width: 6),
-                                          Text(timeStr.isEmpty ? '—' : timeStr,
-                                              style: TextStyle(
-                                                  color: Theme.of(context)
-                                                      .hintColor)),
-                                        ],
-                                      ),
-                                    ],
+                          child: InkWell(
+                            onTap: widget.allowEditMetadata
+                                ? () => _editStudentAt(i)
+                                : null,
+                            onLongPress: widget.allowEditMetadata
+                                ? () => _editStudentAt(i)
+                                : null,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                children: [
+                                  CircleAvatar(
+                                    radius: 20,
+                                    child: Text(initials()),
                                   ),
-                                ),
-                                const SizedBox(width: 12),
-                                Switch(
-                                  value: e['present'] ?? false,
-                                  onChanged: (v) async {
-                                    setState(() {
-                                      roster[i]['present'] = v;
-                                      if (!v) {
-                                        roster[i]['time'] = null;
-                                        roster[i]['status'] = null;
-                                      } else {
-                                        final now = DateTime.now();
-                                        roster[i]['time'] =
-                                            now.toIso8601String();
-                                        roster[i]['status'] =
-                                            _computeStatus(now);
-                                      }
-                                    });
-                                    await _saveSession();
-                                  },
-                                ),
-                              ],
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                name,
+                                                style: const TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Container(
+                                              decoration: BoxDecoration(
+                                                color: chipColor.withValues(
+                                                    alpha: 0.15),
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                      vertical: 4),
+                                              child: Text(
+                                                status,
+                                                style: TextStyle(
+                                                  color: chipColor,
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Row(
+                                          children: [
+                                            Icon(Icons.badge,
+                                                size: 16,
+                                                color: Theme.of(context)
+                                                    .hintColor),
+                                            const SizedBox(width: 6),
+                                            Expanded(
+                                                child: Text(id,
+                                                    style: TextStyle(
+                                                        color: Theme.of(context)
+                                                            .hintColor))),
+                                            const SizedBox(width: 12),
+                                            Icon(Icons.access_time,
+                                                size: 16,
+                                                color: Theme.of(context)
+                                                    .hintColor),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                                timeStr.isEmpty ? '—' : timeStr,
+                                                style: TextStyle(
+                                                    color: Theme.of(context)
+                                                        .hintColor)),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Switch(
+                                        value: e['present'] ?? false,
+                                        onChanged: (v) async {
+                                          setState(() {
+                                            roster[i]['present'] = v;
+                                            if (!v) {
+                                              roster[i]['time'] = null;
+                                              roster[i]['status'] = null;
+                                            } else {
+                                              final now = DateTime.now();
+                                              roster[i]['time'] =
+                                                  now.toIso8601String();
+                                              roster[i]['status'] =
+                                                  _computeStatus(now);
+                                            }
+                                          });
+                                          await _saveSession();
+                                        },
+                                      ),
+                                      if (widget.allowEditMetadata)
+                                        IconButton(
+                                          tooltip: 'Remove student',
+                                          icon:
+                                              const Icon(Icons.delete_outline),
+                                          onPressed: () => _removeStudentAt(i),
+                                        ),
+                                    ],
+                                  )
+                                ],
+                              ),
                             ),
                           ),
                         );

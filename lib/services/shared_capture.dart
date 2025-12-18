@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'token_storage.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class SharedCaptureService {
   final String _baseUrl;
@@ -14,9 +15,16 @@ class SharedCaptureService {
           'https://ditrix-attendance-scanner-server.onrender.com'})
       : _baseUrl = baseUrl ?? 'http://localhost:3000';
 
+  Future<String?> _getFirebaseIdToken() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+    return await user.getIdToken();
+  }
+
   Future<Map<String, dynamic>> listCaptures() async {
-    final token = await TokenStorage.getToken();
-    if (token == null) throw Exception('Not authenticated');
+    String? token = await _getFirebaseIdToken();
+    token ??= await TokenStorage.getToken();
+    if (token == null) throw Exception("Not authenticated");
 
     final response = await http.get(
       Uri.parse('$_baseUrl/shared-captures'),
@@ -38,7 +46,8 @@ class SharedCaptureService {
     required String endTime,
     List<Map<String, dynamic>>? roster,
   }) async {
-    final token = await TokenStorage.getToken();
+    String? token = await _getFirebaseIdToken();
+    token ??= await TokenStorage.getToken();
     if (token == null) throw Exception('Not authenticated');
 
     final response = await http
@@ -74,7 +83,8 @@ class SharedCaptureService {
   }
 
   Future<Map<String, dynamic>> getCapture(String id) async {
-    final token = await TokenStorage.getToken();
+    String? token = await _getFirebaseIdToken();
+    token ??= await TokenStorage.getToken();
     if (token == null) throw Exception('Not authenticated');
 
     final response = await http.get(
@@ -97,7 +107,8 @@ class SharedCaptureService {
     String? endTime,
     List<Map<String, dynamic>>? roster,
   }) async {
-    final token = await TokenStorage.getToken();
+    String? token = await _getFirebaseIdToken();
+    token ??= await TokenStorage.getToken();
     if (token == null) throw Exception('Not authenticated');
 
     final body = <String, dynamic>{};
@@ -124,7 +135,8 @@ class SharedCaptureService {
   }
 
   Future<void> deleteCapture(String id) async {
-    final token = await TokenStorage.getToken();
+    String? token = await _getFirebaseIdToken();
+    token ??= await TokenStorage.getToken();
     if (token == null) throw Exception('Not authenticated');
 
     final response = await http.delete(
@@ -138,7 +150,8 @@ class SharedCaptureService {
   }
 
   Future<String> joinByCode(String code) async {
-    final token = await TokenStorage.getToken();
+    String? token = await _getFirebaseIdToken();
+    token ??= await TokenStorage.getToken();
     if (token == null) throw Exception('Not authenticated');
 
     final response = await http.post(
@@ -156,7 +169,8 @@ class SharedCaptureService {
 
   Future<void> addCollaborator(String captureId, String email,
       {String role = 'viewer'}) async {
-    final token = await TokenStorage.getToken();
+    String? token = await _getFirebaseIdToken();
+    token ??= await TokenStorage.getToken();
     if (token == null) throw Exception('Not authenticated');
 
     final response = await http
@@ -176,7 +190,8 @@ class SharedCaptureService {
   }
 
   Future<void> removeCollaborator(String captureId, int userId) async {
-    final token = await TokenStorage.getToken();
+    String? token = await _getFirebaseIdToken();
+    token ??= await TokenStorage.getToken();
     if (token == null) throw Exception('Not authenticated');
 
     final response = await http.delete(
@@ -190,7 +205,8 @@ class SharedCaptureService {
   }
 
   Future<List<Map<String, dynamic>>> getAllStudents() async {
-    final token = await TokenStorage.getToken();
+    String? token = await _getFirebaseIdToken();
+    token ??= await TokenStorage.getToken();
     if (token == null) throw Exception('Not authenticated');
 
     final response = await http.get(

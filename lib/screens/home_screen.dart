@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/session.dart';
 import '../services/token_storage.dart';
@@ -71,11 +72,12 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_checkingProfile) return;
     setState(() => _checkingProfile = true);
     SharedPreferences? prefs;
+
     try {
       print('[HomeScreen] _onProfileTap start');
-      final token = await TokenStorage.getToken();
-      print('[HomeScreen] token present: ${token != null}');
-      if (token == null) {
+
+      final fbUser = FirebaseAuth.instance.currentUser;
+      if (fbUser == null) {
         if (!mounted) return;
         Navigator.pushNamed(context, '/login');
         return;
@@ -122,6 +124,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // invalid session -> clear token and go to login
       print(
           '[HomeScreen] session invalid -> deleting token and navigating to login');
+      await FirebaseAuth.instance.signOut();
       await TokenStorage.deleteToken();
       if (!mounted) return;
       Navigator.pushNamed(context, '/login');
@@ -244,8 +247,20 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _checkingProfile = true);
     try {
       final prefs = await SharedPreferences.getInstance();
-      final name = prefs.getString('profile_name') ?? '';
-      final avatarRaw = prefs.getString('profile_avatar') ?? '';
+      final fbUser = FirebaseAuth.instance.currentUser;
+
+      final storedName = prefs.getString('profile_name');
+      final name = (storedName != null && storedName.isNotEmpty)
+          ? storedName
+          : (fbUser?.displayName ?? '');
+      final storedAvatar = prefs.getString('profile_avatar');
+      String avatarRaw = storedAvatar ?? '';
+
+      if (avatarRaw.isEmpty && (fbUser?.photoURL?.isNotEmpty ?? false)) {
+        avatarRaw = fbUser!.photoURL!;
+        await prefs.setString('profile_avatar', avatarRaw);
+      }
+
       _profileName = name;
       _profileInitial =
           _initialsFromName(name).isEmpty ? 'K' : _initialsFromName(name);
@@ -257,7 +272,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final trimmed = avatarRaw.trim();
         if (trimmed.startsWith('data:')) {
           // data:<mime>;base64,...
-          final idx = avatarRaw.indexOf(',');
+          final idx = trimmed.indexOf(',');
           if (idx != -1) {
             final b64 = trimmed.substring(idx + 1);
             try {
@@ -266,10 +281,10 @@ class _HomeScreenState extends State<HomeScreen> {
               _profileAvatarBytes = null;
             }
           }
-        } else if (avatarRaw.startsWith('http://') ||
-            avatarRaw.startsWith('https://')) {
+        } else if (trimmed.startsWith('http://') ||
+            trimmed.startsWith('https://')) {
           // prefer to use the remote URL as-is (NetworkImage)
-          _profileAvatarRaw = avatarRaw;
+          _profileAvatarRaw = trimmed;
         } else {
           // maybe plain base64 without data: prefix
           try {
@@ -634,54 +649,13 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Upload selected local sessions to shared captures.
-  Future<void> _uploadSelectedToShared(List<Session> selectedSessions,
-      String? existingSharedId, String? newSharedSubject) async {
-    setState(() => _savingUploads = true);
-    try {
-      // if user requested a new shared capture, create one per session (or one shared capture for all? - we'll create one per session to keep previous semantics)
-      for (final s in selectedSessions) {
-        try {
-          final result = await _sharedService.createCapture(
-            id: s.id,
-            subject: s.subject.isNotEmpty
-                ? s.subject
-                : (newSharedSubject ?? 'Session ${s.id}'),
-            date: s.date,
-            startTime: s.startTime,
-            endTime: s.endTime,
-            roster: s.roster
-                .map((r) => {
-                      'id': r['id'],
-                      'name': r['name'],
-                      'present': r['present'] ?? false,
-                      'time': r['time'],
-                      'status': r['status'],
-                    })
-                .toList(),
-            // if existingSharedId is provided we still call createCapture - server may decide to update/merge
-          );
-          if (!mounted) return;
-          AppNotifier.showSnack(context,
-              'Uploaded ${s.id} -> ${result['capture']?['share_code'] ?? 'ok'}');
-        } catch (e) {
-          AppNotifier.showSnack(context, 'Failed to upload ${s.id}: $e');
-        }
-      }
-      await _refresh();
-    } finally {
-      if (mounted) setState(() => _savingUploads = false);
-    }
-  }
-
   Future<void> _refresh() async {
     final localList = await _store.list();
 
     // Fetch shared captures if authenticated
     try {
-      final token = await TokenStorage.getToken();
-      final isAuth = token != null;
-      print('[HomeScreen] refresh - token present: $isAuth');
+      final isAuth = FirebaseAuth.instance.currentUser != null;
+      print('[HomeScreen] refresh - firebase present: $isAuth');
       // update auth flag for builders
       if (mounted) setState(() => _authenticated = isAuth);
       if (isAuth) {
@@ -767,6 +741,21 @@ class _HomeScreenState extends State<HomeScreen> {
           height: 28,
           fit: BoxFit.cover,
           gaplessPlayback: true,
+          errorBuilder: (_, __, ___) {
+            return Text(_profileInitial,
+                style: const TextStyle(color: Colors.black));
+          },
+        ),
+      );
+    }
+
+    if (_profileAvatarRaw != null && _profileAvatarRaw!.isNotEmpty) {
+      return ClipOval(
+        child: Image.network(
+          _profileAvatarRaw!,
+          width: 28,
+          height: 28,
+          fit: BoxFit.cover,
           errorBuilder: (_, __, ___) {
             return Text(_profileInitial,
                 style: const TextStyle(color: Colors.black));
@@ -1334,8 +1323,13 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
       if (!mounted) return;
-      AppNotifier.showSnack(
-          context, 'Uploaded: ${result['capture']['share_code']}');
+
+      final shareCode = result['shareCode'] ??
+          result['share_code'] ??
+          (result['capture']?['share_code']);
+
+      AppNotifier.showSnack(context,
+          shareCode != null ? 'Uploaded: $shareCode' : 'Uploaded session');
       await _refresh(); // This calls _refresh() which should populate _ownedCaptures
     } catch (e) {
       if (!mounted) return;
@@ -1349,6 +1343,50 @@ class _HomeScreenState extends State<HomeScreen> {
       } else {
         AppNotifier.showSnack(context, 'Upload failed: $errorMsg');
       }
+    }
+  }
+
+  /// Upload selected local sessions to shared captures.
+  Future<void> _uploadSelectedToShared(List<Session> selectedSessions,
+      String? existingSharedId, String? newSharedSubject) async {
+    setState(() => _savingUploads = true);
+    try {
+      // if user requested a new shared capture, create one per session (or one shared capture for all? - we'll create one per session to keep previous semantics)
+      for (final s in selectedSessions) {
+        try {
+          final result = await _sharedService.createCapture(
+            id: s.id,
+            subject: s.subject.isNotEmpty
+                ? s.subject
+                : (newSharedSubject ?? 'Session ${s.id}'),
+            date: s.date,
+            startTime: s.startTime,
+            endTime: s.endTime,
+            roster: s.roster
+                .map((r) => {
+                      'id': r['id'],
+                      'name': r['name'],
+                      'present': r['present'] ?? false,
+                      'time': r['time'],
+                      'status': r['status'],
+                    })
+                .toList(),
+            // if existingSharedId is provided we still call createCapture - server may decide to update/merge
+          );
+          if (!mounted) return;
+          final shareCode = result['shareCode'] ??
+              result['share_code'] ??
+              (result['capture']?['share_code']);
+
+          AppNotifier.showSnack(
+              context, 'Uploaded ${s.id} -> ${shareCode ?? 'ok'}');
+        } catch (e) {
+          AppNotifier.showSnack(context, 'Failed to upload ${s.id}: $e');
+        }
+      }
+      await _refresh();
+    } finally {
+      if (mounted) setState(() => _savingUploads = false);
     }
   }
 

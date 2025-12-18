@@ -44,6 +44,17 @@ class FileIOService {
     return copied;
   }
 
+  static bool _looksLikeHeaderLabel(String s) {
+    final v = s.toLowerCase();
+    return v.contains('student name') ||
+        v.contains('student number') ||
+        v.contains('student_no') ||
+        v.contains('student id') ||
+        v == 'name' ||
+        v == 'id' ||
+        v == 'no.';
+  }
+
   /// Pick CSV masterlist and parse into list of {id, name}
   static Future<List<Map<String, String>>> pickMasterlistCsv() async {
     final result = await FilePicker.platform.pickFiles(
@@ -89,6 +100,7 @@ class FileIOService {
 
     bool looksLikeId(String s) {
       if (s.isEmpty) return false;
+      if (_looksLikeHeaderLabel(s)) return false;
       final hasDigit = s.contains(RegExp(r'\d'));
       final shortToken = s.length < 6;
       return hasDigit || shortToken;
@@ -104,7 +116,10 @@ class FileIOService {
         final cols = splitCsvLine(lines[i]);
         final id = cols.length > idIdx ? cols[idIdx].trim() : '';
         final name = cols.length > nameIdx ? cols[nameIdx].trim() : '';
-        if (id.isNotEmpty && name.isNotEmpty) {
+        if (_looksLikeHeaderLabel(id) || _looksLikeHeaderLabel(name)) {
+          continue;
+        }
+        if (name.isNotEmpty) {
           parsed.add({'id': id, 'name': name});
         }
       }
@@ -116,7 +131,11 @@ class FileIOService {
           final b = cols[1].trim();
           final probableId = looksLikeId(a) ? a : (looksLikeId(b) ? b : a);
           final probableName = probableId == a ? b : a;
-          if (probableId.isNotEmpty && probableName.isNotEmpty) {
+          if (_looksLikeHeaderLabel(probableId) ||
+              _looksLikeHeaderLabel(probableName)) {
+            continue;
+          }
+          if (probableName.isNotEmpty) {
             parsed.add({'id': probableId, 'name': probableName});
           }
         }
@@ -147,6 +166,7 @@ class FileIOService {
 
     bool looksLikeId(String s) {
       if (s.isEmpty) return false;
+      if (_looksLikeHeaderLabel(s)) return false;
       final hasDigit = s.contains(RegExp(r'\d'));
       final shortToken = s.length < 6;
       return hasDigit || shortToken;
@@ -188,6 +208,14 @@ class FileIOService {
       }
 
       if (id.isNotEmpty && name.isNotEmpty) {
+        if (_looksLikeHeaderLabel(id) || _looksLikeHeaderLabel(name)) {
+          continue;
+        }
+        parsed.add({'id': id, 'name': name});
+      } else if (name.isNotEmpty) {
+        if (_looksLikeHeaderLabel(name)) {
+          continue;
+        }
         parsed.add({'id': id, 'name': name});
       }
     }

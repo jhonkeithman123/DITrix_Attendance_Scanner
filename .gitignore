@@ -48,4 +48,4 @@ app.*.map.json
 desktop.ini
 /backup-server
 .vercel
-.env*.local
+.env.local

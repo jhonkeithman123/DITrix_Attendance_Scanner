@@ -171,10 +171,25 @@ class AuthService {
       }
 
       if (resp.statusCode == 200) {
-        final Map<String, dynamic> body = jsonDecode(resp.body);
-        return body['profile'] is Map
-            ? Map<String, dynamic>.from(body['profile'])
-            : null;
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
+        final profile = (data['profile'] ?? {}) as Map<String, dynamic>;
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(
+            'profile_name', (profile['name'] ?? '').toString());
+        await prefs.setString(
+            'profile_email', (profile['email'] ?? '').toString());
+
+        // Only set avatar from server IF the user don't already have one locally
+        final existingAvatar = prefs.getString('profile_avatar');
+        if (existingAvatar == null || existingAvatar.isEmpty) {
+          final serverAvatar = profile['avatar_url']?.toString();
+          if (serverAvatar != null && serverAvatar.isNotEmpty) {
+            await prefs.setString('profile_avatar', serverAvatar);
+          }
+        }
+
+        return profile;
       }
 
       return null;
@@ -228,8 +243,15 @@ class AuthService {
             'profile_name', profile['name']?.toString() ?? '');
         await prefs.setString(
             'profile_email', profile['email']?.toString() ?? '');
-        await prefs.setString(
-            'profile_avatar', profile['avatar_url']?.toString() ?? '');
+
+        // Only set avatar from server if none is stored locally yet
+        final existingAvatar = prefs.getString('profile_avatar');
+        if (existingAvatar == null || existingAvatar.isEmpty) {
+          final serverAvatar = profile['avatar_url']?.toString();
+          if (serverAvatar != null && serverAvatar.isNotEmpty) {
+            await prefs.setString('profile_avatar', serverAvatar);
+          }
+        }
       }
       return true;
     } on FirebaseAuthException catch (e, st) {
@@ -511,12 +533,16 @@ class AuthService {
     final body = <String, dynamic>{'name': name};
     if (avatarBase64 != null) body['avatarBase64'] = avatarBase64;
 
+    final prefs = await SharedPreferences.getInstance();
+
     final resp = await _authedPut('/profile', body);
 
     if (resp.statusCode != 200) {
       final msg = resp.body.isNotEmpty ? resp.body : 'Server error';
       throw Exception('Failed to update profile: $msg');
     }
+
+    await prefs.setString('profile_name', name);
     return;
   }
 }

@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "path": "android/local.properties",
+      "template": "android/local.properties.template",
+      "regen": true
+    },
+    {
+      "path": "android/key.properties",
+      "template": "android/key.properties.template",
+      "regen": true
+    }
+  ],
+  "notes": [
+    "android/key.jks is not auto-regenerated; create once with keytool.",
+    "build/ and other generated dirs are intentionally ignored."
+  ]
+}
