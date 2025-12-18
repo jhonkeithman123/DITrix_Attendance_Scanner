@@ -9,6 +9,16 @@
       "path": "android/key.properties",
       "template": "android/key.properties.template",
       "regen": true
+    },
+    {
+      "path": ".env.local",
+      "template": "env.local.template",
+      "regen": true
+    },
+    {
+      "path": "server/.env",
+      "template": "server/.env.template",
+      "regen": true
     }
   ],
   "notes": [
